@@ -17,6 +17,10 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Importar rotas e middleware
+const authRoutes = require('./routes/authRoutes');
+const errorMiddleware = require('./middleware/errorMiddleware');
+
 // Rota de teste
 app.get('/', (req, res) => {
   res.json({
@@ -25,6 +29,12 @@ app.get('/', (req, res) => {
     port: process.env.PORT
   });
 });
+
+// Rotas da API
+app.use('/api/auth', authRoutes);
+
+// Error handler (sempre no fim)
+app.use(errorMiddleware);
 
 const PORT = process.env.PORT || 5000;
 
