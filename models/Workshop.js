@@ -1,0 +1,22 @@
+const mongoose = require('mongoose');
+
+const WorkshopSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  address: { type: String, required: true },
+  contact: { type: String, required: true },
+
+  owner: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+
+  openingHours: {
+    start: { type: String, default: '09:00' },
+    end: { type: String, default: '18:00' }
+  },
+
+  maxSlotsPerHour: { type: Number, default: 2 }
+}, { timestamps: true });
+
+module.exports = mongoose.model('Workshop', WorkshopSchema);
