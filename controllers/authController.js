@@ -37,10 +37,34 @@ exports.registerAdmin = async (req, res) => {
     user.workshop = workshop._id;
     await user.save();
 
+    // CRIAR TOKEN JWT
+    const token = jwt.sign(
+      {
+        id: user._id,
+        email: user.email,
+        role: user.role,
+        workshop: workshop._id
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    // RETORNAR TOKEN E USER COMPLETO
     res.status(201).json({
       message: 'Admin e oficina criados com sucesso',
-      userId: user._id,
-      workshopId: workshop._id
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        workshop: {
+          id: workshop._id,
+          name: workshop.name,
+          address: workshop.address,
+          contact: workshop.contact
+        }
+      }
     });
 
   } catch (error) {
@@ -67,15 +91,34 @@ exports.registerCustomer = async (req, res) => {
       role: 'customer'
     });
 
+    // CRIAR TOKEN JWT
+    const token = jwt.sign(
+      {
+        id: user._id,
+        email: user.email,
+        role: user.role
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    // RETORNAR TOKEN E USER
     res.status(201).json({
       message: 'Cliente registado com sucesso',
-      userId: user._id
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role
+      }
     });
 
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
+
 
 // Login
 exports.login = async (req, res) => {

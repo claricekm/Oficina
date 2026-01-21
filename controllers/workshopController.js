@@ -1,4 +1,6 @@
 const Workshop = require('../models/Workshop');
+const Service = require('../models/Service'); // ← ADICIONA ESTE IMPORT NO TOPO
+
 
 // Get workshop details
 exports.getWorkshop = async (req, res) => {
@@ -14,6 +16,18 @@ exports.getWorkshop = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+
+// Get services from a specific workshop ← NOVA FUNÇÃO
+exports.getWorkshopServices = async (req, res) => {
+  try {
+    const services = await Service.find({ workshop: req.params.id });
+    res.json(services);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 
 // Update workshop (only owner/admin)
 exports.updateWorkshop = async (req, res) => {
@@ -49,6 +63,7 @@ exports.updateWorkshop = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
 
 // Get all workshops (for customers to browse)
 exports.getAllWorkshops = async (req, res) => {

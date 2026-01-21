@@ -9,6 +9,9 @@ router.get('/', workshopController.getAllWorkshops);
 // GET /api/workshops/:id - Get one workshop (public)
 router.get('/:id', workshopController.getWorkshop);
 
+// GET /api/workshops/:id/services - Get services from a workshop (public) ← NOVA ROTA
+router.get('/:id/services', workshopController.getWorkshopServices);
+
 // PUT /api/workshops/:id - Update workshop (protected, only owner)
 router.put('/:id', authMiddleware, workshopController.updateWorkshop);
 
