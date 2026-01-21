@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 // Register Admin + Create Workshop
 exports.registerAdmin = async (req, res) => {
   try {
+    console.log('Dados recebidos:', req.body);
     const { name, email, password, workshopName, address, contact } = req.body;
 
     // Check if user exists
@@ -162,3 +163,4 @@ exports.login = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
