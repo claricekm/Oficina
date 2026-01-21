@@ -3,6 +3,114 @@ const Service = require('../models/Service');
 const Vehicle = require('../models/Vehicle');
 const Workshop = require('../models/Workshop');
 
+// Check availability for a specific date and services
+exports.checkAvailability = async (req, res) => {
+  try {
+    const { workshopId, date, serviceIds } = req.body;
+
+    // Validate required fields
+    if (!workshopId || !date || !serviceIds || serviceIds.length === 0) {
+      return res.status(400).json({ 
+        message: 'Workshop, data e serviços são obrigatórios' 
+      });
+    }
+
+    // Get workshop data
+    const workshop = await Workshop.findById(workshopId);
+    if (!workshop) {
+      return res.status(404).json({ message: 'Oficina não encontrada' });
+    }
+
+    // Get services and calculate total duration
+    const services = await Service.find({ _id: { $in: serviceIds } });
+    if (services.length === 0) {
+      return res.status(404).json({ message: 'Serviços não encontrados' });
+    }
+
+    const totalDuration = services.reduce((sum, service) => sum + service.durationMinutes, 0);
+
+    // Set date range (start of day to start of next day)
+    const requestedDate = new Date(date);
+    requestedDate.setHours(0, 0, 0, 0);
+
+    const nextDay = new Date(requestedDate);
+    nextDay.setDate(nextDay.getDate() + 1);
+
+    // Get existing bookings for this date
+    const existingBookings = await Booking.find({
+      workshop: workshopId,
+      startTime: {
+        $gte: requestedDate,
+        $lt: nextDay
+      },
+      status: { $nin: ['cancelled', 'completed'] }
+    });
+
+    // Parse workshop opening hours
+    const [startHour, startMinute] = workshop.openingHours.start.split(':').map(Number);
+    const [endHour, endMinute] = workshop.openingHours.end.split(':').map(Number);
+
+    // Generate available time slots
+    const availableSlots = [];
+    let currentTime = startHour * 60 + startMinute; // Convert to minutes
+    const closeTime = endHour * 60 + endMinute;
+
+    // Loop through day in 30-minute intervals
+    while (currentTime + totalDuration <= closeTime) {
+      const slotHour = Math.floor(currentTime / 60);
+      const slotMinute = currentTime % 60;
+      const timeString = `${String(slotHour).padStart(2, '0')}:${String(slotMinute).padStart(2, '0')}`;
+
+      // Create Date objects for slot start and end
+      const slotStart = new Date(requestedDate);
+      slotStart.setHours(slotHour, slotMinute, 0, 0);
+
+      const slotEnd = new Date(slotStart);
+      slotEnd.setMinutes(slotEnd.getMinutes() + totalDuration);
+
+      // Check for conflicting bookings
+      const conflictingBookings = existingBookings.filter(booking => {
+        const bookingStart = new Date(booking.startTime);
+        const bookingEnd = new Date(booking.endTime);
+
+        // Check if times overlap
+        return (
+          (slotStart >= bookingStart && slotStart < bookingEnd) ||
+          (slotEnd > bookingStart && slotEnd <= bookingEnd) ||
+          (slotStart <= bookingStart && slotEnd >= bookingEnd)
+        );
+      });
+
+      // Calculate available spots
+      const spotsLeft = workshop.maxSlotsPerHour - conflictingBookings.length;
+
+      // Add slot if available
+      if (spotsLeft > 0) {
+        availableSlots.push({
+          time: timeString,
+          available: true,
+          spotsLeft
+        });
+      }
+
+      currentTime += 30; // Next slot (30 minutes later)
+    }
+
+    res.json({
+      date: requestedDate,
+      totalDuration,
+      availableSlots
+    });
+
+  } catch (error) {
+    console.error('Erro ao verificar disponibilidade:', error);
+    res.status(500).json({ 
+      message: 'Erro ao verificar disponibilidade',
+      error: error.message 
+    });
+  }
+};
+
 // Create booking (customer)
 exports.createBooking = async (req, res) => {
   try {
@@ -257,3 +365,5 @@ exports.assignMechanic = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+module.exports = exports;
