@@ -1,18 +1,51 @@
+/**
+ * ROTAS DE OFICINAS (Workshop Routes)
+ * * Gere a visualização e edição dos dados da oficina.
+ * * As rotas de leitura são públicas (para a pesquisa de oficinas na Homepage).
+ * * A rota de edição é protegida e exclusiva para o Admin daquela oficina.
+ * * @module routes/workshopRoutes
+ */
+
 const express = require('express');
 const router = express.Router();
 const workshopController = require('../controllers/workshopController');
 const authMiddleware = require('../middleware/authMiddleware');
+const { adminOnly } = require('../middleware/rbacMiddleware');
 
-// GET /api/workshops - List all workshops (public)
+console.log('✅ workshopRoutes.js carregado');
+
+// --- ROTAS PÚBLICAS ---
+
+/**
+ * LISTAR TODAS AS OFICINAS
+ * * GET /api/workshops
+ * * Usado na Homepage ou página de pesquisa.
+ * * Aceita query params (ex: ?city=Viseu) se implementado no controller.
+ */
 router.get('/', workshopController.getAllWorkshops);
 
-// GET /api/workshops/:id - Get one workshop (public)
+/**
+ * DETALHES DA OFICINA
+ * * GET /api/workshops/:id
+ * * Retorna morada, contacto, horário e imagem.
+ */
 router.get('/:id', workshopController.getWorkshop);
 
-// GET /api/workshops/:id/services - Get services from a workshop (public) ← NOVA ROTA
+/**
+ * LISTAR SERVIÇOS DA OFICINA
+ * * GET /api/workshops/:id/services
+ * * Atalho conveniente para obter o "Menu" de uma oficina específica.
+ */
 router.get('/:id/services', workshopController.getWorkshopServices);
 
-// PUT /api/workshops/:id - Update workshop (protected, only owner)
-router.put('/:id', authMiddleware, workshopController.updateWorkshop);
+// --- ROTAS DE GESTÃO (Admin) ---
+
+/**
+ * ATUALIZAR DADOS DA OFICINA
+ * * PUT /api/workshops/:id
+ * * Alterar nome, morada, horário ou capacidade de slots.
+ * * O controlador verifica se o Admin logado é realmente o dono desta oficina.
+ */
+router.put('/:id', authMiddleware, adminOnly, workshopController.updateWorkshop);
 
 module.exports = router;
