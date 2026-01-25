@@ -1,34 +1,19 @@
-/**
- * CONTROLADOR DE AGENDAMENTOS (Booking Controller)
- * * Gere toda a lógica de marcações, disponibilidade de horários,
- * atribuição de mecânicos e validação de regras de negócio.
- * * @module controllers/bookingController
- */
-
+const mongoose = require('mongoose');
 const Booking = require('../models/Booking');
 const Service = require('../models/Service');
 const Vehicle = require('../models/Vehicle');
 const Workshop = require('../models/Workshop');
 const User = require('../models/User');
 
-// --- CONSTANTES E REGRAS DE NEGÓCIO ---
-/** Limite máximo de horas de trabalho por semana para um mecânico */
+// Constants
 const MAX_WEEKLY_HOURS = 40;
-/** Antecedência mínima (em horas) para realizar uma marcação */
-const MIN_HOURS_NOTICE = 48; 
+const MIN_HOURS_NOTICE = 48; // Minimum hours in advance for booking
 
-// --- FUNÇÕES AUXILIARES (HELPERS) ---
-
-/**
- * Calcula o início (Segunda 00:00) e fim (Domingo 23:59) da semana atual.
- * Usado para verificar o limite de 40h semanais.
- * @param {Date} date - Data de referência
- */
+// Helper: Get start and end of current week (Monday to Sunday)
 const getWeekBounds = (date = new Date()) => {
   const d = new Date(date);
   const day = d.getDay();
-  // Ajusta para Segunda-feira ser o dia 1 (Se for Domingo/0, volta 6 dias)
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1); 
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust for Monday start
 
   const weekStart = new Date(d.setDate(diff));
   weekStart.setHours(0, 0, 0, 0);
@@ -39,14 +24,11 @@ const getWeekBounds = (date = new Date()) => {
   return { weekStart, weekEnd };
 };
 
-/**
- * Calcula quantas horas um mecânico já tem ocupadas numa semana específica.
- * @returns {Promise<number>} Total de horas ocupadas.
- */
+// Helper: Calculate mechanic's weekly hours
 const getMechanicWeeklyHours = async (mechanicId, weekStart, weekEnd) => {
   const bookings = await Booking.find({
     mechanic: mechanicId,
-    status: { $nin: ['cancelled'] }, // Ignora cancelados
+    status: { $nin: ['cancelled'] },
     startTime: { $gte: weekStart, $lt: weekEnd }
   }).populate('service');
 
@@ -54,20 +36,25 @@ const getMechanicWeeklyHours = async (mechanicId, weekStart, weekEnd) => {
     return sum + (booking.service?.durationMinutes || 0);
   }, 0);
 
-  return totalMinutes / 60; // Converte minutos para horas
+  return totalMinutes / 60; // Return hours
 };
 
-/**
- * Verifica se uma data cai no Sábado (6) ou Domingo (0).
- */
+// Helper: Check if date is weekend (Saturday=6, Sunday=0)
 const isWeekend = (date) => {
   const day = new Date(date).getDay();
   return day === 0 || day === 6;
 };
 
-/**
- * Valida se a marcação respeita as 48h de antecedência mínima.
- */
+// Helper: Get workshop ID as string (handles both ObjectId and populated object)
+const getWorkshopId = (workshop) => {
+  if (!workshop) return '';
+  if (typeof workshop === 'object' && workshop._id) {
+    return workshop._id.toString();
+  }
+  return workshop.toString();
+};
+
+// Helper: Check if booking meets minimum notice requirement
 const meetsMinimumNotice = (startTime) => {
   const now = new Date();
   const start = new Date(startTime);
@@ -75,11 +62,7 @@ const meetsMinimumNotice = (startTime) => {
   return hoursUntilBooking >= MIN_HOURS_NOTICE;
 };
 
-/**
- * Processo automático: Busca agendamentos antigos que ficaram como 'confirmed'
- * ou 'in_progress' e marca-os como 'completed'.
- * Isso mantém o histórico limpo sem ação manual.
- */
+// Helper: Auto-complete expired bookings
 const autoCompleteExpiredBookings = async (workshopId) => {
   const now = new Date();
 
@@ -101,28 +84,19 @@ const autoCompleteExpiredBookings = async (workshopId) => {
   return result.modifiedCount;
 };
 
-// --- CONTROLADORES EXPORTADOS ---
-
-/**
- * VERIFICAR DISPONIBILIDADE
- * * Algoritmo complexo que calcula slots de 30min livres num dia específico.
- * * 1. Verifica se é fim de semana.
- * * 2. Verifica regra de 48h.
- * * 3. Cruza o horário de funcionamento da oficina com agendamentos existentes.
- * * 4. Retorna lista de horários (slots) onde ainda há vagas.
- */
+// Check availability for a specific date and services
 exports.checkAvailability = async (req, res) => {
   try {
     const { workshopId, date, serviceIds } = req.body;
 
-    // Validações básicas
+    // Validate required fields
     if (!workshopId || !date || !serviceIds || serviceIds.length === 0) {
       return res.status(400).json({
         message: 'Workshop, data e serviços são obrigatórios'
       });
     }
 
-    // Regra: Fim de semana bloqueado
+    // Check if requested date is a weekend
     if (isWeekend(date)) {
       return res.status(400).json({
         message: 'Não aceitamos marcações nos fins de semana (Sábado e Domingo)',
@@ -130,7 +104,7 @@ exports.checkAvailability = async (req, res) => {
       });
     }
 
-    // Regra: Antecedência mínima (48h)
+    // Check minimum notice (48h) - only for the date itself, time slot check comes later
     const requestedDate = new Date(date);
     const minDate = new Date();
     minDate.setHours(minDate.getHours() + MIN_HOURS_NOTICE);
@@ -142,13 +116,13 @@ exports.checkAvailability = async (req, res) => {
       });
     }
 
-    // Buscar dados da oficina (horário de abertura/fecho)
+    // Get workshop data
     const workshop = await Workshop.findById(workshopId);
     if (!workshop) {
       return res.status(404).json({ message: 'Oficina não encontrada' });
     }
 
-    // Calcular duração total dos serviços selecionados
+    // Get services and calculate total duration
     const services = await Service.find({ _id: { $in: serviceIds } });
     if (services.length === 0) {
       return res.status(404).json({ message: 'Serviços não encontrados' });
@@ -156,12 +130,14 @@ exports.checkAvailability = async (req, res) => {
 
     const totalDuration = services.reduce((sum, service) => sum + service.durationMinutes, 0);
 
-    // Definir intervalo do dia (00:00 às 23:59)
+    // Set date range (start of day to start of next day)
+    // requestedDate already declared above, just reset hours
     requestedDate.setHours(0, 0, 0, 0);
+
     const nextDay = new Date(requestedDate);
     nextDay.setDate(nextDay.getDate() + 1);
 
-    // Buscar agendamentos que já ocupam este dia
+    // Get existing bookings for this date
     const existingBookings = await Booking.find({
       workshop: workshopId,
       startTime: {
@@ -171,34 +147,34 @@ exports.checkAvailability = async (req, res) => {
       status: { $nin: ['cancelled', 'completed'] }
     });
 
-    // Parse do horário de funcionamento (ex: "09:00" -> 9, 0)
+    // Parse workshop opening hours
     const [startHour, startMinute] = workshop.openingHours.start.split(':').map(Number);
     const [endHour, endMinute] = workshop.openingHours.end.split(':').map(Number);
 
-    // --- ALGORITMO DE GERAÇÃO DE SLOTS ---
+    // Generate available time slots
     const availableSlots = [];
-    let currentTime = startHour * 60 + startMinute; // Converter tudo para minutos
+    let currentTime = startHour * 60 + startMinute; // Convert to minutes
     const closeTime = endHour * 60 + endMinute;
 
-    // Loop a cada 30 minutos
+    // Loop through day in 30-minute intervals
     while (currentTime + totalDuration <= closeTime) {
       const slotHour = Math.floor(currentTime / 60);
       const slotMinute = currentTime % 60;
       const timeString = `${String(slotHour).padStart(2, '0')}:${String(slotMinute).padStart(2, '0')}`;
 
-      // Criar datas para inicio e fim do slot proposto
+      // Create Date objects for slot start and end
       const slotStart = new Date(requestedDate);
       slotStart.setHours(slotHour, slotMinute, 0, 0);
 
       const slotEnd = new Date(slotStart);
       slotEnd.setMinutes(slotEnd.getMinutes() + totalDuration);
 
-      // Verificar colisões com agendamentos existentes
+      // Check for conflicting bookings
       const conflictingBookings = existingBookings.filter(booking => {
         const bookingStart = new Date(booking.startTime);
         const bookingEnd = new Date(booking.endTime);
 
-        // Lógica de sobreposição de horários
+        // Check if times overlap
         return (
           (slotStart >= bookingStart && slotStart < bookingEnd) ||
           (slotEnd > bookingStart && slotEnd <= bookingEnd) ||
@@ -206,10 +182,10 @@ exports.checkAvailability = async (req, res) => {
         );
       });
 
-      // Calcular vagas restantes (Max por hora - Conflitos)
+      // Calculate available spots
       const spotsLeft = workshop.maxSlotsPerHour - conflictingBookings.length;
 
-      // Se houver vaga, adiciona à lista
+      // Add slot if available
       if (spotsLeft > 0) {
         availableSlots.push({
           time: timeString,
@@ -218,7 +194,7 @@ exports.checkAvailability = async (req, res) => {
         });
       }
 
-      currentTime += 30; // Avança para o próximo slot de 30min
+      currentTime += 30; // Next slot (30 minutes later)
     }
 
     res.json({
@@ -236,49 +212,73 @@ exports.checkAvailability = async (req, res) => {
   }
 };
 
-/**
- * CRIAR AGENDAMENTO (Cliente)
- * * Valida veículo, serviço, regras de data (passado, fim de semana, 48h)
- * e conflitos de mecânico (se atribuído).
- */
+// Create booking (customer)
+// Note: Transactions require MongoDB replica set. For standalone, we use atomic operations.
 exports.createBooking = async (req, res) => {
   try {
     const { workshopId, vehicleId, serviceId, startTime, mechanicId } = req.body;
 
-    // Validar propriedade do veículo
+    // Validate vehicle belongs to user
     const vehicle = await Vehicle.findById(vehicleId);
     if (!vehicle || vehicle.owner.toString() !== req.user.id) {
       return res.status(403).json({ message: 'Veículo inválido' });
     }
 
-    // Validar Serviço
+    // Get service to calculate end time
     const service = await Service.findById(serviceId);
     if (!service || service.workshop.toString() !== workshopId) {
       return res.status(404).json({ message: 'Serviço não encontrado' });
     }
 
-    // Calcular hora de término
+    // Get workshop to check slot availability
+    const workshop = await Workshop.findById(workshopId);
+    if (!workshop) {
+      return res.status(404).json({ message: 'Oficina não encontrada' });
+    }
+
+    // Calculate end time
     const start = new Date(startTime);
     const end = new Date(start.getTime() + service.durationMinutes * 60000);
 
-    // Validações de Tempo
+    // Check if start time is in the past
     if (start < new Date()) {
       return res.status(400).json({ message: 'Não pode marcar no passado' });
     }
 
+    // Check if booking date is weekend
     if (isWeekend(start)) {
       return res.status(400).json({
         message: 'Não aceitamos marcações nos fins de semana (Sábado e Domingo)'
       });
     }
 
-    if (!meetsMinimumNotice(start)) {
+    // Check minimum notice - use service.minAdvanceTime if available, else default
+    const minAdvanceHours = service.minAdvanceTime || MIN_HOURS_NOTICE;
+    const now = new Date();
+    const hoursUntilBooking = (start - now) / (1000 * 60 * 60);
+    if (hoursUntilBooking < minAdvanceHours) {
       return res.status(400).json({
-        message: `Marcações requerem um mínimo de ${MIN_HOURS_NOTICE} horas de antecedência`
+        message: `Marcações requerem um mínimo de ${minAdvanceHours} horas de antecedência`
       });
     }
 
-    // Verificar disponibilidade do Mecânico (caso seja pré-selecionado)
+    // Check slot availability
+    const activeBookingsCount = await Booking.countDocuments({
+      workshop: workshopId,
+      status: { $nin: ['cancelled', 'completed'] },
+      $or: [
+        { startTime: { $lt: end }, endTime: { $gt: start } }
+      ]
+    });
+
+    if (activeBookingsCount >= workshop.maxSlotsPerHour) {
+      return res.status(409).json({
+        message: 'Não há vagas disponíveis para este horário',
+        spotsAvailable: 0
+      });
+    }
+
+    // Check for mechanic conflicts (if mechanic is assigned)
     if (mechanicId) {
       const conflict = await Booking.findOne({
         mechanic: mechanicId,
@@ -289,13 +289,13 @@ exports.createBooking = async (req, res) => {
       });
 
       if (conflict) {
-        return res.status(409).json({ 
-          message: 'Mecânico não disponível neste horário' 
+        return res.status(409).json({
+          message: 'Mecânico não disponível neste horário'
         });
       }
     }
 
-    // Criar Registo
+    // Create booking with estimatedPrice from service
     const booking = await Booking.create({
       workshop: workshopId,
       customer: req.user.id,
@@ -304,10 +304,11 @@ exports.createBooking = async (req, res) => {
       service: serviceId,
       startTime: start,
       endTime: end,
-      status: 'pending'
+      status: 'pending',
+      estimatedPrice: service.price,  // Set estimated price from service
+      customerNotes: req.body.customerNotes || null
     });
 
-    // Retornar objeto populado
     const populatedBooking = await Booking.findById(booking._id)
       .populate('workshop')
       .populate('service')
@@ -324,35 +325,29 @@ exports.createBooking = async (req, res) => {
   }
 };
 
-/**
- * LISTAR AGENDAMENTOS
- * * Filtra agendamentos baseados no papel do utilizador (Role):
- * - Cliente: Vê apenas os seus.
- * - Mecânico: Vê os seus e recebe dashboard categorizado (Ativos/Futuros).
- * - Admin: Vê todos da oficina e aciona limpeza automática de antigos.
- */
+// Get all bookings (filtered by role)
 exports.getBookings = async (req, res) => {
   try {
     let query = {};
 
-    // Filtro Cliente
+    // Customer sees only their bookings
     if (req.user.role === 'customer') {
       query.customer = req.user.id;
     }
 
-    // Filtro Mecânico
+    // Mechanic sees only their bookings
     if (req.user.role === 'mechanic') {
       query.mechanic = req.user.id;
     }
 
-    // Filtro Admin
+    // Admin sees all bookings from their workshop
     if (req.user.role === 'admin') {
       query.workshop = req.user.workshop;
-      // Admin a ver a lista aciona a limpeza de agendamentos expirados
+      // Auto-complete expired bookings for this workshop
       await autoCompleteExpiredBookings(req.user.workshop);
     }
 
-    // Mecânico também limpa os seus agendamentos expirados
+    // For mechanics, also auto-complete their expired bookings
     if (req.user.role === 'mechanic') {
       const now = new Date();
       await Booking.updateMany(
@@ -371,7 +366,6 @@ exports.getBookings = async (req, res) => {
       );
     }
 
-    // Busca principal
     const bookings = await Booking.find(query)
       .populate('customer', 'name email')
       .populate('mechanic', 'name email')
@@ -380,18 +374,22 @@ exports.getBookings = async (req, res) => {
       .populate('workshop')
       .sort({ startTime: -1 });
 
-    // DASHBOARD DO MECÂNICO (Resposta diferenciada)
+    // For mechanics, categorize bookings
     if (req.user.role === 'mechanic') {
       const now = new Date();
-      
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(now);
+      todayEnd.setHours(23, 59, 59, 999);
+
       const categorized = {
-        active: bookings.filter(b => 
-          b.status !== 'completed' && 
+        active: bookings.filter(b =>
+          b.status !== 'completed' &&
           b.status !== 'cancelled' &&
           new Date(b.startTime) <= now &&
           new Date(b.endTime) > now
         ),
-        future: bookings.filter(b => 
+        future: bookings.filter(b =>
           b.status !== 'completed' &&
           b.status !== 'cancelled' &&
           new Date(b.startTime) > now
@@ -410,7 +408,6 @@ exports.getBookings = async (req, res) => {
       });
     }
 
-    // Resposta padrão (Admin/Cliente)
     res.json(bookings);
 
   } catch (error) {
@@ -418,11 +415,7 @@ exports.getBookings = async (req, res) => {
   }
 };
 
-/**
- * DISPONIBILIDADE DOS MECÂNICOS (Admin Only)
- * * Calcula a carga horária semanal de cada mecânico para ajudar o Admin na atribuição.
- * * Verifica limite de 40h semanais.
- */
+// Get mechanics with weekly availability (admin only)
 exports.getMechanicsAvailability = async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
@@ -433,13 +426,13 @@ exports.getMechanicsAvailability = async (req, res) => {
     const targetDate = bookingDate ? new Date(bookingDate) : new Date();
     const { weekStart, weekEnd } = getWeekBounds(targetDate);
 
-    // Buscar todos os mecânicos da oficina
+    // Get all mechanics for this workshop
     const mechanics = await User.find({
       workshop: req.user.workshop,
       role: 'mechanic'
     }).select('name email');
 
-    // Calcular carga horária de cada um
+    // Calculate weekly hours for each mechanic
     const mechanicsWithAvailability = await Promise.all(
       mechanics.map(async (mechanic) => {
         const weeklyHours = await getMechanicWeeklyHours(mechanic._id, weekStart, weekEnd);
@@ -468,11 +461,7 @@ exports.getMechanicsAvailability = async (req, res) => {
   }
 };
 
-/**
- * OBTER UM AGENDAMENTO
- * * Retorna detalhes de uma marcação específica.
- * * Inclui verificação de permissão (apenas dono, mecânico atribuído ou admin).
- */
+// Get single booking
 exports.getBooking = async (req, res) => {
   try {
     const booking = await Booking.findById(req.params.id)
@@ -486,7 +475,7 @@ exports.getBooking = async (req, res) => {
       return res.status(404).json({ message: 'Marcação não encontrada' });
     }
 
-    // Verificação de Segurança (Permissões)
+    // Check permissions
     if (req.user.role === 'customer' && booking.customer._id.toString() !== req.user.id) {
       return res.status(403).json({ message: 'Sem permissão' });
     }
@@ -502,11 +491,7 @@ exports.getBooking = async (req, res) => {
   }
 };
 
-/**
- * ATUALIZAR STATUS (Mecânico/Admin)
- * * Permite mudar status (ex: pending -> in_progress -> completed)
- * * Permite adicionar notas técnicas.
- */
+// Update booking status (mechanic/admin)
 exports.updateBookingStatus = async (req, res) => {
   try {
     const { status, notes } = req.body;
@@ -517,10 +502,12 @@ exports.updateBookingStatus = async (req, res) => {
       return res.status(404).json({ message: 'Marcação não encontrada' });
     }
 
-    // Apenas Admin da oficina ou Mecânico atribuído podem alterar
-    const isAuthorized = 
-      req.user.role === 'admin' && booking.workshop.toString() === req.user.workshop ||
-      req.user.role === 'mechanic' && booking.mechanic?.toString() === req.user.id;
+    // Only mechanic assigned or admin can update
+    const bookingWorkshopId = getWorkshopId(booking.workshop);
+    const userWorkshopId = getWorkshopId(req.user.workshop);
+    const isAuthorized =
+      (req.user.role === 'admin' && bookingWorkshopId === userWorkshopId) ||
+      (req.user.role === 'mechanic' && booking.mechanic?.toString() === req.user.id);
 
     if (!isAuthorized) {
       return res.status(403).json({ message: 'Sem permissão' });
@@ -541,39 +528,74 @@ exports.updateBookingStatus = async (req, res) => {
   }
 };
 
-/**
- * CANCELAR AGENDAMENTO
- * * Permite ao Cliente ou Admin cancelar, desde que o serviço
- * ainda não tenha sido concluído.
- */
+// Cancel booking (customer or admin)
 exports.cancelBooking = async (req, res) => {
   try {
+    const { reason, notes } = req.body;
+
     const booking = await Booking.findById(req.params.id);
-    
+
     if (!booking) {
       return res.status(404).json({ message: 'Marcação não encontrada' });
     }
 
-    // Verificação de permissões
-    const canCancel = 
-      req.user.role === 'customer' && booking.customer.toString() === req.user.id ||
-      req.user.role === 'admin' && booking.workshop.toString() === req.user.workshop;
+    // Check permissions and determine who is cancelling
+    const bookingWorkshopId = getWorkshopId(booking.workshop);
+    const userWorkshopId = getWorkshopId(req.user.workshop);
+    const isCustomer = req.user.role === 'customer' && booking.customer.toString() === req.user.id;
+    const isAdmin = req.user.role === 'admin' && bookingWorkshopId === userWorkshopId;
 
-    if (!canCancel) {
+    if (!isCustomer && !isAdmin) {
       return res.status(403).json({ message: 'Sem permissão para cancelar' });
     }
 
-    // Bloqueio de regra lógica
+    // Can't cancel if already completed
     if (booking.status === 'completed') {
       return res.status(400).json({ message: 'Não pode cancelar marcação concluída' });
     }
 
+    // Can't cancel if already cancelled
+    if (booking.status === 'cancelled') {
+      return res.status(400).json({ message: 'Marcação já foi cancelada' });
+    }
+
+    // Customer can only cancel pending, awaiting_approval states
+    // Admin can cancel more states (except completed)
+    if (isCustomer && !['pending', 'awaiting_approval'].includes(booking.status)) {
+      return res.status(400).json({
+        message: `Cliente não pode cancelar marcação com estado "${booking.status}". Contacte a oficina.`
+      });
+    }
+
+    // Determine cancellation reason
+    let cancellationReason = reason;
+    if (!cancellationReason) {
+      // Default reasons based on context
+      if (booking.status === 'awaiting_approval' && isCustomer) {
+        cancellationReason = 'price_rejected';
+      } else if (isCustomer) {
+        cancellationReason = 'customer_request';
+      } else {
+        cancellationReason = 'admin_decision';
+      }
+    }
+
+    // Update booking
     booking.status = 'cancelled';
+    booking.cancelledBy = req.user.id;
+    booking.cancelledAt = new Date();
+    booking.cancellationReason = cancellationReason;
+    if (notes) booking.cancellationNotes = notes;
+
     await booking.save();
+
+    // Populate for response
+    const populatedBooking = await Booking.findById(booking._id)
+      .populate('cancelledBy', 'name email role');
 
     res.json({
       message: 'Marcação cancelada',
-      booking
+      booking: populatedBooking
     });
 
   } catch (error) {
@@ -581,21 +603,16 @@ exports.cancelBooking = async (req, res) => {
   }
 };
 
-/**
- * OBTER CONCLUÍDOS RECENTEMENTE (Polling do Cliente)
- * * Endpoint para o App verificar se o carro ficou pronto nas últimas 24h.
- * * Útil para notificações ou atualizações de UI em tempo real.
- */
+// Get recently completed bookings for customer (for polling)
 exports.getRecentlyCompletedBookings = async (req, res) => {
   try {
-    // Apenas clientes
+    // Only customers can use this endpoint
     if (req.user.role !== 'customer') {
       return res.status(403).json({ message: 'Apenas clientes podem aceder a este endpoint' });
     }
 
     const { since } = req.query;
-    // Padrão: últimas 24h
-    const sinceDate = since ? new Date(since) : new Date(Date.now() - 24 * 60 * 60 * 1000); 
+    const sinceDate = since ? new Date(since) : new Date(Date.now() - 24 * 60 * 60 * 1000); // Default: last 24 hours
 
     const bookings = await Booking.find({
       customer: req.user.id,
@@ -622,12 +639,7 @@ exports.getRecentlyCompletedBookings = async (req, res) => {
   }
 };
 
-/**
- * ATRIBUIR MECÂNICO (Gestão de RH)
- * * Função crítica para o Admin.
- * * Verifica se o mecânico tem conflito de horário.
- * * Verifica se a atribuição violaria o limite de 40h semanais (MAX_WEEKLY_HOURS).
- */
+// Assign mechanic to booking (admin only)
 exports.assignMechanic = async (req, res) => {
   try {
     const { mechanicId } = req.body;
@@ -638,12 +650,15 @@ exports.assignMechanic = async (req, res) => {
       return res.status(404).json({ message: 'Marcação não encontrada' });
     }
 
-    // Verificar se é admin da oficina correta
-    if (req.user.role !== 'admin' || booking.workshop.toString() !== req.user.workshop) {
+    // Check if user is admin of this workshop
+    const bookingWorkshopId = getWorkshopId(booking.workshop);
+    const userWorkshopId = getWorkshopId(req.user.workshop);
+
+    if (req.user.role !== 'admin' || bookingWorkshopId !== userWorkshopId) {
       return res.status(403).json({ message: 'Sem permissão' });
     }
 
-    // Verificação 1: Conflito de agenda (Sobreposição de horários)
+    // Check for mechanic time slot conflicts
     const conflict = await Booking.findOne({
       _id: { $ne: booking._id },
       mechanic: mechanicId,
@@ -659,7 +674,7 @@ exports.assignMechanic = async (req, res) => {
       });
     }
 
-    // Verificação 2: Limite de 40 horas semanais
+    // Check 40h/week limit
     const { weekStart, weekEnd } = getWeekBounds(booking.startTime);
     const currentWeeklyHours = await getMechanicWeeklyHours(mechanicId, weekStart, weekEnd);
     const serviceDurationHours = (booking.service?.durationMinutes || 0) / 60;
@@ -673,7 +688,6 @@ exports.assignMechanic = async (req, res) => {
       });
     }
 
-    // Sucesso: Atribui e confirma
     booking.mechanic = mechanicId;
     booking.status = 'confirmed';
     await booking.save();
@@ -686,6 +700,290 @@ exports.assignMechanic = async (req, res) => {
       message: 'Mecânico atribuído',
       booking: updatedBooking
     });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ============================================
+// BUDGET APPROVAL WORKFLOW ENDPOINTS
+// ============================================
+
+// Set final price (mechanic) - moves to AWAITING_APPROVAL
+exports.setPrice = async (req, res) => {
+  try {
+    const { finalPrice, mechanicNotes } = req.body;
+
+    if (!finalPrice || finalPrice <= 0) {
+      return res.status(400).json({ message: 'Preço final é obrigatório e deve ser maior que zero' });
+    }
+
+    const booking = await Booking.findById(req.params.id);
+
+    if (!booking) {
+      return res.status(404).json({ message: 'Marcação não encontrada' });
+    }
+
+    // Only mechanic assigned or admin can set price
+    const bookingWorkshopId = getWorkshopId(booking.workshop);
+    const userWorkshopId = getWorkshopId(req.user.workshop);
+    const isAuthorized =
+      (req.user.role === 'mechanic' && booking.mechanic?.toString() === req.user.id) ||
+      (req.user.role === 'admin' && bookingWorkshopId === userWorkshopId);
+
+    if (!isAuthorized) {
+      return res.status(403).json({ message: 'Sem permissão' });
+    }
+
+    // Can only set price for pending or confirmed bookings
+    if (!['pending', 'confirmed'].includes(booking.status)) {
+      return res.status(400).json({
+        message: `Não é possível definir preço para marcação com estado "${booking.status}"`
+      });
+    }
+
+    // Update booking
+    booking.finalPrice = finalPrice;
+    if (mechanicNotes) booking.mechanicNotes = mechanicNotes;
+    booking.status = 'awaiting_approval';
+
+    await booking.save();
+
+    const populatedBooking = await Booking.findById(booking._id)
+      .populate('customer', 'name email')
+      .populate('service')
+      .populate('vehicle');
+
+    res.json({
+      message: 'Preço definido. Aguardando aprovação do cliente.',
+      booking: populatedBooking
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Approve price (customer) - moves to APPROVED
+exports.approvePrice = async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id);
+
+    if (!booking) {
+      return res.status(404).json({ message: 'Marcação não encontrada' });
+    }
+
+    // Only customer who owns the booking can approve
+    if (req.user.role !== 'customer' || booking.customer.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Sem permissão' });
+    }
+
+    // Can only approve if status is awaiting_approval
+    if (booking.status !== 'awaiting_approval') {
+      return res.status(400).json({
+        message: `Não é possível aprovar marcação com estado "${booking.status}". Estado esperado: awaiting_approval`
+      });
+    }
+
+    // Update booking
+    booking.status = 'approved';
+    booking.approvedAt = new Date();
+
+    await booking.save();
+
+    const populatedBooking = await Booking.findById(booking._id)
+      .populate('service')
+      .populate('vehicle')
+      .populate('workshop', 'name');
+
+    res.json({
+      message: 'Orçamento aprovado. O serviço pode ser iniciado.',
+      booking: populatedBooking
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Start service (mechanic) - moves to IN_PROGRESS
+exports.startService = async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id);
+
+    if (!booking) {
+      return res.status(404).json({ message: 'Marcação não encontrada' });
+    }
+
+    // Only mechanic assigned or admin can start service
+    const bookingWorkshopId = getWorkshopId(booking.workshop);
+    const userWorkshopId = getWorkshopId(req.user.workshop);
+    const isAuthorized =
+      (req.user.role === 'mechanic' && booking.mechanic?.toString() === req.user.id) ||
+      (req.user.role === 'admin' && bookingWorkshopId === userWorkshopId);
+
+    if (!isAuthorized) {
+      return res.status(403).json({ message: 'Sem permissão' });
+    }
+
+    // Must have mechanic assigned
+    if (!booking.mechanic) {
+      return res.status(400).json({ message: 'Marcação deve ter um mecânico atribuído' });
+    }
+
+    // Can only start if approved or confirmed (legacy flow)
+    if (!['approved', 'confirmed'].includes(booking.status)) {
+      return res.status(400).json({
+        message: `Não é possível iniciar serviço com estado "${booking.status}". Estado esperado: approved ou confirmed`
+      });
+    }
+
+    booking.status = 'in_progress';
+    booking.startedAt = new Date();
+
+    await booking.save();
+
+    res.json({
+      message: 'Serviço iniciado',
+      booking
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Complete service (mechanic) - moves to COMPLETED
+exports.completeService = async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id);
+
+    if (!booking) {
+      return res.status(404).json({ message: 'Marcação não encontrada' });
+    }
+
+    // Only mechanic assigned or admin can complete
+    const bookingWorkshopId = getWorkshopId(booking.workshop);
+    const userWorkshopId = getWorkshopId(req.user.workshop);
+    const isAuthorized =
+      (req.user.role === 'mechanic' && booking.mechanic?.toString() === req.user.id) ||
+      (req.user.role === 'admin' && bookingWorkshopId === userWorkshopId);
+
+    if (!isAuthorized) {
+      return res.status(403).json({ message: 'Sem permissão' });
+    }
+
+    // Can only complete if in_progress
+    if (booking.status !== 'in_progress') {
+      return res.status(400).json({
+        message: `Não é possível concluir serviço com estado "${booking.status}". Estado esperado: in_progress`
+      });
+    }
+
+    booking.status = 'completed';
+    booking.completedAt = new Date();
+
+    await booking.save();
+
+    res.json({
+      message: 'Serviço concluído',
+      booking
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Generate invoice (only for completed bookings)
+exports.getInvoice = async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id)
+      .populate('customer', 'name email nif phone')
+      .populate('service')
+      .populate('vehicle')
+      .populate('workshop');
+
+    if (!booking) {
+      return res.status(404).json({ message: 'Marcação não encontrada' });
+    }
+
+    // Check permissions - customer or admin can view invoice
+    const bookingWorkshopId = getWorkshopId(booking.workshop);
+    const userWorkshopId = getWorkshopId(req.user.workshop);
+    const canView =
+      (req.user.role === 'customer' && booking.customer._id.toString() === req.user.id) ||
+      (req.user.role === 'admin' && bookingWorkshopId === userWorkshopId) ||
+      (req.user.role === 'mechanic' && booking.mechanic?.toString() === req.user.id);
+
+    if (!canView) {
+      return res.status(403).json({ message: 'Sem permissão' });
+    }
+
+    // Can only generate invoice for completed bookings
+    if (booking.status !== 'completed') {
+      return res.status(400).json({
+        message: 'Fatura só pode ser gerada para marcações concluídas'
+      });
+    }
+
+    // Calculate invoice values
+    const basePrice = booking.finalPrice || booking.estimatedPrice || booking.service.price;
+    const vatRate = 0.23;  // 23% VAT in Portugal
+    const vatAmount = basePrice * vatRate;
+    const totalAmount = basePrice + vatAmount;
+
+    const invoice = {
+      invoiceNumber: `INV-${booking._id.toString().slice(-8).toUpperCase()}`,
+      invoiceDate: booking.completedAt || booking.updatedAt,
+
+      workshop: {
+        name: booking.workshop.name,
+        nif: booking.workshop.nif,
+        address: booking.workshop.address,
+        city: booking.workshop.city,
+        postalCode: booking.workshop.postalCode,
+        contact: booking.workshop.contact
+      },
+
+      customer: {
+        name: booking.customer.name,
+        email: booking.customer.email,
+        nif: booking.customerNif || booking.customer.nif || 'N/A',
+        phone: booking.customer.phone
+      },
+
+      vehicle: {
+        licensePlate: booking.vehicle.licensePlate,
+        brand: booking.vehicle.brand,
+        model: booking.vehicle.model,
+        year: booking.vehicle.year
+      },
+
+      service: {
+        name: booking.service.name,
+        description: booking.service.publicDescription,
+        date: booking.startTime,
+        duration: booking.service.durationMinutes
+      },
+
+      pricing: {
+        estimatedPrice: booking.estimatedPrice,
+        finalPrice: booking.finalPrice,
+        basePrice: basePrice,
+        vatRate: vatRate * 100,  // 23%
+        vatAmount: Math.round(vatAmount * 100) / 100,
+        totalAmount: Math.round(totalAmount * 100) / 100
+      },
+
+      bookingId: booking._id,
+      completedAt: booking.completedAt,
+      paymentStatus: booking.paymentStatus,
+      paymentMethod: booking.paymentMethod
+    };
+
+    res.json(invoice);
 
   } catch (error) {
     res.status(500).json({ message: error.message });

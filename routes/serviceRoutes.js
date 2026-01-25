@@ -1,56 +1,22 @@
-/**
- * ROTAS DE SERVIÇOS (Service Routes)
- * * Define o "Menu" da oficina (ex: Troca de Óleo, Inspeção).
- * * As leituras são públicas (para o site).
- * * As escritas (Criar/Editar/Apagar) são exclusivas do Admin.
- * * @module routes/serviceRoutes
- */
-
 const express = require('express');
 const router = express.Router();
 const serviceController = require('../controllers/serviceController');
 const authMiddleware = require('../middleware/authMiddleware');
 const { adminOnly } = require('../middleware/rbacMiddleware');
 
-console.log('✅ serviceRoutes.js carregado');
-
-// --- ROTAS PÚBLICAS ---
-
-/**
- * LISTAR SERVIÇOS DA OFICINA
- * * GET /api/services/workshop/:workshopId
- * * Usado no Frontend para mostrar o preçário aos clientes.
- */
+// GET /api/services/workshop/:workshopId - List services of a workshop (public)
 router.get('/workshop/:workshopId', serviceController.getServicesByWorkshop);
 
-/**
- * DETALHES DO SERVIÇO
- * * GET /api/services/:id
- * * Mostra descrições completas e preço de um serviço específico.
- */
+// GET /api/services/:id - Get single service (public)
 router.get('/:id', serviceController.getService);
 
-// --- ROTAS DE ADMINISTRAÇÃO (Protegidas) ---
-
-/**
- * CRIAR NOVO SERVIÇO
- * * POST /api/services
- * * Adiciona um item ao menu da oficina.
- */
+// POST /api/services - Create service (admin only)
 router.post('/', authMiddleware, adminOnly, serviceController.createService);
 
-/**
- * ATUALIZAR SERVIÇO
- * * PUT /api/services/:id
- * * Atualizar preços, descrições ou duração.
- */
+// PUT /api/services/:id - Update service (admin only)
 router.put('/:id', authMiddleware, adminOnly, serviceController.updateService);
 
-/**
- * REMOVER SERVIÇO (Soft Delete)
- * * DELETE /api/services/:id
- * * Marca o serviço como inativo para não perder histórico.
- */
+// DELETE /api/services/:id - Delete service (admin only)
 router.delete('/:id', authMiddleware, adminOnly, serviceController.deleteService);
 
 module.exports = router;

@@ -1,38 +1,22 @@
-/**
- * CONTROLADOR DE VEÍCULOS
- * * Gere o registo de viaturas dos clientes.
- * * Inclui validação de matrículas portuguesas e endpoints auxiliares
- * para preencher listas de Marcas e Modelos no Frontend.
- * * @module controllers/vehicleController
- */
-
 const Vehicle = require('../models/Vehicle');
 const User = require('../models/User');
-// Funções importadas dos utilitários (Validação de Matrícula)
 const { formatLicensePlate, validateLicensePlate } = require('../utils/helpers');
-// Dados estáticos ou dinâmicos de viaturas (Marcas, Modelos)
 const { getMakes, getModels, getFuelTypesForModel, getAllFuelTypes } = require('../data/vehicleData');
 
-/**
- * REGISTAR VEÍCULO
- * * Adiciona uma viatura à garagem do cliente.
- * * Valida o formato da matrícula antes de salvar.
- * * @param req - Body com brand, model, licensePlate, year, fuelType
- * @param res - Retorna o veículo criado
- */
+// Create vehicle (customer only)
 exports.createVehicle = async (req, res) => {
   try {
     const { brand, model, licensePlate, year, fuelType } = req.body;
 
-    // Validação rigorosa da matrícula (Padrão Português)
+    // Validate license plate format
     if (!validateLicensePlate(licensePlate)) {
       return res.status(400).json({ message: 'Formato de matrícula inválido. Use: AA-00-AA, 00-AA-00 ou 00-00-AA' });
     }
 
-    // Formatação (Ex: garantir maiúsculas)
+    // Format license plate
     const formattedPlate = formatLicensePlate(licensePlate);
 
-    // Verificar duplicidade
+    // Check if license plate already exists
     const existingVehicle = await Vehicle.findOne({ licensePlate: formattedPlate });
     if (existingVehicle) {
       return res.status(400).json({ message: 'Matrícula já registada' });
@@ -47,7 +31,7 @@ exports.createVehicle = async (req, res) => {
       fuelType
     });
 
-    // Vincular o veículo à conta do utilizador (Array de veículos)
+    // Add vehicle to user's vehicles array
     await User.findByIdAndUpdate(req.user.id, {
       $push: { vehicles: vehicle._id }
     });
@@ -62,10 +46,7 @@ exports.createVehicle = async (req, res) => {
   }
 };
 
-/**
- * LISTAR MEUS VEÍCULOS
- * * Retorna todas as viaturas associadas ao utilizador logado.
- */
+// Get all vehicles of logged user
 exports.getMyVehicles = async (req, res) => {
   try {
     const vehicles = await Vehicle.find({ owner: req.user.id });
@@ -75,11 +56,7 @@ exports.getMyVehicles = async (req, res) => {
   }
 };
 
-/**
- * OBTER DETALHES DO VEÍCULO
- * * Retorna dados de um veículo específico.
- * * Segurança: Garante que o utilizador só vê os seus próprios carros.
- */
+// Get single vehicle
 exports.getVehicle = async (req, res) => {
   try {
     const vehicle = await Vehicle.findById(req.params.id);
@@ -88,7 +65,7 @@ exports.getVehicle = async (req, res) => {
       return res.status(404).json({ message: 'Veículo não encontrado' });
     }
 
-    // Verificação de Propriedade
+    // Check if user owns this vehicle
     if (vehicle.owner.toString() !== req.user.id) {
       return res.status(403).json({ message: 'Sem permissão para ver este veículo' });
     }
@@ -99,11 +76,7 @@ exports.getVehicle = async (req, res) => {
   }
 };
 
-/**
- * ATUALIZAR VEÍCULO
- * * Permite corrigir dados da viatura.
- * * Se a matrícula for alterada, ela é revalidada e reformatada.
- */
+// Update vehicle
 exports.updateVehicle = async (req, res) => {
   try {
     const vehicle = await Vehicle.findById(req.params.id);
@@ -112,7 +85,7 @@ exports.updateVehicle = async (req, res) => {
       return res.status(404).json({ message: 'Veículo não encontrado' });
     }
 
-    // Verificação de Propriedade
+    // Check ownership
     if (vehicle.owner.toString() !== req.user.id) {
       return res.status(403).json({ message: 'Sem permissão para editar este veículo' });
     }
@@ -121,15 +94,13 @@ exports.updateVehicle = async (req, res) => {
 
     if (brand) vehicle.brand = brand;
     if (model) vehicle.model = model;
-    
-    // Lógica especial para atualização de matrícula
     if (licensePlate) {
+      // Validate license plate format
       if (!validateLicensePlate(licensePlate)) {
         return res.status(400).json({ message: 'Formato de matrícula inválido. Use: AA-00-AA, 00-AA-00 ou 00-00-AA' });
       }
       vehicle.licensePlate = formatLicensePlate(licensePlate);
     }
-    
     if (year) vehicle.year = year;
     if (fuelType !== undefined) vehicle.fuelType = fuelType;
 
@@ -145,10 +116,7 @@ exports.updateVehicle = async (req, res) => {
   }
 };
 
-/**
- * APAGAR VEÍCULO
- * * Remove a viatura e atualiza a lista de veículos do utilizador.
- */
+// Delete vehicle
 exports.deleteVehicle = async (req, res) => {
   try {
     const vehicle = await Vehicle.findById(req.params.id);
@@ -157,12 +125,12 @@ exports.deleteVehicle = async (req, res) => {
       return res.status(404).json({ message: 'Veículo não encontrado' });
     }
 
-    // Verificação de Propriedade
+    // Check ownership
     if (vehicle.owner.toString() !== req.user.id) {
       return res.status(403).json({ message: 'Sem permissão para apagar este veículo' });
     }
 
-    // Remover referência no User antes de apagar o documento
+    // Remove from user's vehicles array
     await User.findByIdAndUpdate(req.user.id, {
       $pull: { vehicles: vehicle._id }
     });
@@ -177,14 +145,10 @@ exports.deleteVehicle = async (req, res) => {
 };
 
 // ==========================================
-// ENDPOINTS AUXILIARES DE DADOS (Públicos)
-// Usados para popular os selects no Frontend
+// Vehicle Data Cascade Endpoints (Public)
 // ==========================================
 
-/**
- * LISTAR MARCAS
- * * Retorna lista de fabricantes (ex: BMW, Audi, Toyota).
- */
+// Get all vehicle makes
 exports.getVehicleMakes = async (req, res) => {
   try {
     const makes = getMakes();
@@ -194,11 +158,7 @@ exports.getVehicleMakes = async (req, res) => {
   }
 };
 
-/**
- * LISTAR MODELOS
- * * Retorna modelos baseado na marca selecionada.
- * * @param req - Parâmetro 'make' na URL
- */
+// Get models for a specific make
 exports.getVehicleModels = async (req, res) => {
   try {
     const { make } = req.params;
@@ -209,10 +169,7 @@ exports.getVehicleModels = async (req, res) => {
   }
 };
 
-/**
- * LISTAR COMBUSTÍVEIS POR MODELO
- * * Retorna tipos de motor (Diesel, Gasolina, Elétrico) compatíveis com o modelo.
- */
+// Get fuel types for a specific make and model
 exports.getVehicleFuelTypes = async (req, res) => {
   try {
     const { make, model } = req.params;
@@ -223,10 +180,7 @@ exports.getVehicleFuelTypes = async (req, res) => {
   }
 };
 
-/**
- * TODOS OS COMBUSTÍVEIS
- * * Lista genérica de tipos de combustível.
- */
+// Get all fuel types
 exports.getAllFuelTypes = async (req, res) => {
   try {
     const fuelTypes = getAllFuelTypes();

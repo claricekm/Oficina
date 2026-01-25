@@ -1,16 +1,6 @@
-/**
- * MODELO DE AGENDAMENTO (Schema)
- * * A coleção central do sistema.
- * * Liga todas as peças: Quem (Customer) vai a Onde (Workshop),
- * * Com o quê (Vehicle), Fazer o quê (Service) e Quando (Dates).
- * * @module models/Booking
- */
-
 const mongoose = require('mongoose');
 
 const BookingSchema = new mongoose.Schema({
-  // --- RELACIONAMENTOS ---
-  
   workshop: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Workshop',
@@ -26,7 +16,7 @@ const BookingSchema = new mongoose.Schema({
   mechanic: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    default: null // Pode ser atribuído depois pelo Admin
+    default: null
   },
 
   vehicle: {
@@ -41,24 +31,42 @@ const BookingSchema = new mongoose.Schema({
     required: true
   },
 
-  // --- DADOS TEMPORAIS ---
-  
   startTime: { type: Date, required: true },
   endTime: { type: Date, required: true },
 
-  // --- ESTADO DO SERVIÇO ---
-  
+  // Status with budget approval workflow
+  // Flow: pending → awaiting_approval → approved → in_progress → completed
+  // Legacy flow still works: pending → confirmed → in_progress → completed
   status: {
     type: String,
-    enum: ['pending', 'confirmed', 'in_progress', 'completed', 'cancelled'],
+    enum: ['pending', 'confirmed', 'awaiting_approval', 'approved', 'in_progress', 'completed', 'cancelled'],
     default: 'pending'
   },
 
-  notes: { type: String },
+  // Price fields for budget approval workflow
+  estimatedPrice: {
+    type: Number,
+    default: null  // Set from service.price when booking is created
+  },
+  finalPrice: {
+    type: Number,
+    default: null  // Set by mechanic after inspection
+  },
 
-  // --- AUTOMAÇÃO (Job Cron / Polling) ---
-  // Usado para saber se o serviço foi fechado automaticamente pelo sistema
-  // após passar a hora de término.
+  // Customer and mechanic notes
+  notes: { type: String },  // General notes (legacy)
+  customerNotes: { type: String },  // Customer's notes when booking
+  mechanicNotes: {
+    type: String,
+    select: false  // Only visible to staff
+  },
+
+  // Timestamps for state transitions
+  approvedAt: { type: Date, default: null },
+  startedAt: { type: Date, default: null },
+  completedAt: { type: Date, default: null },
+
+  // Auto-completion tracking
   autoCompleted: {
     type: Boolean,
     default: false
@@ -68,8 +76,27 @@ const BookingSchema = new mongoose.Schema({
     default: null
   },
 
-  // --- GESTÃO FINANCEIRA ---
-  // Campos necessários para o paymentController
+  // Cancellation tracking
+  cancelledBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  cancelledAt: {
+    type: Date,
+    default: null
+  },
+  cancellationReason: {
+    type: String,
+    enum: ['customer_request', 'price_rejected', 'schedule_conflict', 'admin_decision', 'other'],
+    default: null
+  },
+  cancellationNotes: {
+    type: String,
+    default: null
+  },
+
+  // Payment tracking
   paymentStatus: {
     type: String,
     enum: ['pending', 'paid', 'failed', 'refunded'],
@@ -88,6 +115,6 @@ const BookingSchema = new mongoose.Schema({
     type: String,
     default: null
   }
-}, { timestamps: true }); // Cria automaticamente createdAt e updatedAt
+}, { timestamps: true });
 
 module.exports = mongoose.model('Booking', BookingSchema);

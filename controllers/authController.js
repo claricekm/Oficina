@@ -1,83 +1,111 @@
-/**
- * CONTROLADOR DE AUTENTICAÇÃO (Auth Controller)
- * * Responsável pelo registo de utilizadores (Admin, Cliente, Mecânico),
- * criação de oficinas e processo de login.
- * * @module controllers/authController
- * @requires mongoose
- * @requires bcryptjs
- * @requires jsonwebtoken
- */
-
 const User = require('../models/User');
 const Workshop = require('../models/Workshop');
+const RefreshToken = require('../models/RefreshToken');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { 
-    capitalizeFirstLetter, 
-    validateNIF, 
-    validatePostalCode, 
-    formatPostalCode, 
-    validatePhone, 
-    formatPhoneNumber 
-} = require('../utils/helpers');
+const crypto = require('crypto');
+const { capitalizeFirstLetter, validateNIF, validatePostalCode, formatPostalCode, validatePhone, formatPhoneNumber } = require('../utils/helpers');
 
-/**
- * REGISTAR ADMIN E OFICINA
- * * Cria um utilizador 'admin' e, simultaneamente, cria a sua oficina.
- * Realiza validações estritas de NIF e Código Postal de Portugal.
- * * @async
- * @param Object req - Objeto de requisição do Express
- * @param Object res - Objeto de resposta do Express
- * @returns Object JSON com mensagem, token JWT e dados do utilizador
- */
+// Token configuration
+const ACCESS_TOKEN_EXPIRY = '15m';  // 15 minutes per spec
+const REFRESH_TOKEN_EXPIRY_DAYS = 7;
+
+// Helper: Generate access token
+const generateAccessToken = (user) => {
+  return jwt.sign(
+    {
+      id: user._id,
+      email: user.email,
+      role: user.role,
+      workshop: user.workshop || null
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: ACCESS_TOKEN_EXPIRY }
+  );
+};
+
+// Helper: Generate refresh token and save to database
+const generateRefreshToken = async (userId) => {
+  const token = crypto.randomBytes(64).toString('hex');
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+
+  // Remove any existing refresh tokens for this user (single session)
+  await RefreshToken.deleteMany({ user: userId });
+
+  // Create new refresh token
+  await RefreshToken.create({
+    user: userId,
+    token,
+    expiresAt
+  });
+
+  return token;
+};
+
+// Helper: Set cookies for tokens
+const setTokenCookies = (res, accessToken, refreshToken) => {
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // Access token cookie
+  res.cookie('token', accessToken, {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax',
+    maxAge: 15 * 60 * 1000  // 15 minutes
+  });
+
+  // Refresh token cookie
+  res.cookie('refreshToken', refreshToken, {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax',
+    maxAge: REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000  // 7 days
+  });
+};
+
+// Register Admin + Create Workshop
 exports.registerAdmin = async (req, res) => {
   try {
     console.log('Dados recebidos:', req.body);
-    
-    // Extração dos dados (Adicionei city, postalCode e nif que faltavam na extração)
-    const { name, email, password, workshopName, address, contact, city, postalCode, nif } = req.body;
+    const { name, email, password, workshopName, address, city, postalCode, nif, contact } = req.body;
 
-    // --- VALIDAÇÕES ---
-    
-    // 1. Campos obrigatórios
+    // Validate required fields
     if (!city || !postalCode || !nif) {
       return res.status(400).json({ message: 'Cidade, código postal e NIF são obrigatórios' });
     }
 
-    // 2. Validação de formato NIF (Portugal)
+    // Validate NIF format
     if (!validateNIF(nif)) {
       return res.status(400).json({ message: 'NIF inválido. Deve ter 9 dígitos válidos.' });
     }
 
-    // 3. Validação de formato Código Postal (XXXX-XXX)
+    // Validate postal code format
     if (!validatePostalCode(postalCode)) {
       return res.status(400).json({ message: 'Código postal inválido. Formato: XXXX-XXX' });
     }
 
-    // 4. Verificação de duplicidade de Email
+    // Check if user exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({ message: 'Email já registado' });
     }
 
-    // 5. Verificação de duplicidade de NIF da Oficina
+    // Check if NIF already exists
     const existingWorkshop = await Workshop.findOne({ nif });
     if (existingWorkshop) {
       return res.status(400).json({ message: 'Já existe uma oficina registada com este NIF' });
     }
 
-    // --- CRIAÇÃO DE DADOS ---
-
-    // Hash da password para segurança
+    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Normalização de Strings (Primeira letra maiúscula)
+    // Normalize names and city
     const normalizedName = capitalizeFirstLetter(name);
     const normalizedWorkshopName = capitalizeFirstLetter(workshopName);
     const normalizedCity = capitalizeFirstLetter(city);
     const formattedPostalCode = formatPostalCode(postalCode);
 
-    // 1. Criar Utilizador (Admin)
+    // Create user first (sem workshop ainda)
     const user = await User.create({
       name: normalizedName,
       email,
@@ -85,7 +113,7 @@ exports.registerAdmin = async (req, res) => {
       role: 'admin'
     });
 
-    // 2. Criar Oficina vinculada ao Admin
+    // Create workshop
     const workshop = await Workshop.create({
       name: normalizedWorkshopName,
       address,
@@ -96,28 +124,22 @@ exports.registerAdmin = async (req, res) => {
       owner: user._id
     });
 
-    // 3. Atualizar Admin com o ID da Oficina criada
+    // Update user with workshop
     user.workshop = workshop._id;
     await user.save();
 
-    // --- AUTENTICAÇÃO ---
+    // Generate tokens
+    const accessToken = generateAccessToken(user);
+    const refreshToken = await generateRefreshToken(user._id);
 
-    // Gerar Token JWT
-    const token = jwt.sign(
-      {
-        id: user._id,
-        email: user.email,
-        role: user.role,
-        workshop: workshop._id
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    // Set HttpOnly cookies
+    setTokenCookies(res, accessToken, refreshToken);
 
-    // Retornar sucesso
+    // RETORNAR TOKEN E USER COMPLETO
     res.status(201).json({
       message: 'Admin e oficina criados com sucesso',
-      token,
+      token: accessToken,
+      refreshToken,
       user: {
         id: user._id,
         name: user.name,
@@ -140,38 +162,30 @@ exports.registerAdmin = async (req, res) => {
   }
 };
 
-/**
- * REGISTAR CLIENTE (Customer)
- * * Regista um utilizador final. Valida NIF e Telefone apenas se fornecidos.
- * * @async
- * @param Object req - Body contendo dados do cliente
- * @param Object res - Resposta JSON
- */
+// Register Customer
 exports.registerCustomer = async (req, res) => {
   try {
     const { name, email, password, phone, nif } = req.body;
 
-    // Verificar existência
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({ message: 'Email já registado' });
     }
 
-    // Validações Opcionais (apenas se o campo vier preenchido)
+    // Validate NIF if provided
     if (nif && !validateNIF(nif)) {
       return res.status(400).json({ message: 'NIF inválido. Deve ter 9 dígitos válidos.' });
     }
 
+    // Validate phone if provided
     if (phone && !validatePhone(phone)) {
       return res.status(400).json({ message: 'Número de telefone inválido. Use formato português (9XX XXX XXX).' });
     }
 
-    // Preparação dos dados
     const hashedPassword = await bcrypt.hash(password, 10);
     const normalizedName = capitalizeFirstLetter(name);
     const formattedPhone = phone ? formatPhoneNumber(phone) : null;
 
-    // Criação do Cliente
     const user = await User.create({
       name: normalizedName,
       email,
@@ -181,20 +195,18 @@ exports.registerCustomer = async (req, res) => {
       nif: nif || null
     });
 
-    // Gerar Token
-    const token = jwt.sign(
-      {
-        id: user._id,
-        email: user.email,
-        role: user.role
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    // Generate tokens
+    const accessToken = generateAccessToken(user);
+    const refreshToken = await generateRefreshToken(user._id);
 
+    // Set HttpOnly cookies
+    setTokenCookies(res, accessToken, refreshToken);
+
+    // RETORNAR TOKEN E USER
     res.status(201).json({
       message: 'Cliente registado com sucesso',
-      token,
+      token: accessToken,
+      refreshToken,
       user: {
         id: user._id,
         name: user.name,
@@ -210,25 +222,18 @@ exports.registerCustomer = async (req, res) => {
   }
 };
 
-/**
- * REGISTAR MECÂNICO
- * * Apenas acessível por Admins autenticados.
- * Cria um utilizador 'mechanic' e associa-o automaticamente à oficina do Admin.
- * * @async
- * @requires middleware/auth - Requer que req.user esteja preenchido pelo middleware de autenticação
- */
+// Register Mechanic (Admin only - creates mechanic for their workshop)
 exports.registerMechanic = async (req, res) => {
   try {
     const { name, email, password } = req.body;
-    
-    // O ID da oficina vem do token do Admin logado (req.user)
     const adminWorkshopId = req.user.workshop;
 
-    // Validação de Segurança
+    // Verify admin has a workshop
     if (!adminWorkshopId) {
       return res.status(400).json({ message: 'Admin não está associado a nenhuma oficina' });
     }
 
+    // Check if user exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({ message: 'Email já registado' });
@@ -237,13 +242,13 @@ exports.registerMechanic = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     const normalizedName = capitalizeFirstLetter(name);
 
-    // Criação do Mecânico associado à oficina
+    // Create mechanic user associated with admin's workshop
     const user = await User.create({
       name: normalizedName,
       email,
       password: hashedPassword,
       role: 'mechanic',
-      workshop: adminWorkshopId // Vínculo automático
+      workshop: adminWorkshopId
     });
 
     res.status(201).json({
@@ -262,44 +267,32 @@ exports.registerMechanic = async (req, res) => {
   }
 };
 
-/**
- * LOGIN DE UTILIZADOR
- * * Autentica qualquer tipo de utilizador (Admin, Mechanic, Customer).
- * Retorna o Token JWT necessário para rotas protegidas.
- * * @async
- */
+
+// Login
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Busca utilizador e popula os dados da oficina (se existir)
     const user = await User.findOne({ email }).populate('workshop');
-    
     if (!user) {
       return res.status(400).json({ message: 'Credenciais inválidas' });
     }
 
-    // Comparar password (texto plano vs hash)
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ message: 'Credenciais inválidas' });
     }
 
-    // Criação do Payload do Token
-    const token = jwt.sign(
-      {
-        id: user._id,
-        email: user.email,
-        role: user.role,
-        // Inclui ID da oficina se o utilizador for Admin ou Mecânico
-        workshop: user.workshop?._id || null 
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    // Generate tokens
+    const accessToken = generateAccessToken(user);
+    const refreshToken = await generateRefreshToken(user._id);
+
+    // Set HttpOnly cookies
+    setTokenCookies(res, accessToken, refreshToken);
 
     res.json({
-      token,
+      token: accessToken,  // Keep for backward compatibility
+      refreshToken,  // Also return for clients that need it
       user: {
         id: user._id,
         name: user.name,
@@ -313,3 +306,84 @@ exports.login = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// Refresh access token using refresh token
+exports.refresh = async (req, res) => {
+  try {
+    // Get refresh token from cookie or body
+    const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
+
+    if (!refreshToken) {
+      return res.status(401).json({ message: 'Refresh token não fornecido' });
+    }
+
+    // Find refresh token in database
+    const storedToken = await RefreshToken.findOne({ token: refreshToken });
+
+    if (!storedToken) {
+      return res.status(401).json({ message: 'Refresh token inválido' });
+    }
+
+    // Check if expired
+    if (storedToken.expiresAt < new Date()) {
+      await RefreshToken.deleteOne({ _id: storedToken._id });
+      return res.status(401).json({ message: 'Refresh token expirado' });
+    }
+
+    // Get user
+    const user = await User.findById(storedToken.user).populate('workshop');
+    if (!user) {
+      await RefreshToken.deleteOne({ _id: storedToken._id });
+      return res.status(401).json({ message: 'Utilizador não encontrado' });
+    }
+
+    // Generate new access token
+    const newAccessToken = generateAccessToken(user);
+
+    // Set new access token cookie
+    const isProduction = process.env.NODE_ENV === 'production';
+    res.cookie('token', newAccessToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
+      maxAge: 15 * 60 * 1000  // 15 minutes
+    });
+
+    res.json({
+      token: newAccessToken,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        workshop: user.workshop
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Logout - clear tokens
+exports.logout = async (req, res) => {
+  try {
+    // Get refresh token from cookie or body
+    const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
+
+    // Delete refresh token from database if it exists
+    if (refreshToken) {
+      await RefreshToken.deleteOne({ token: refreshToken });
+    }
+
+    // Clear cookies
+    res.clearCookie('token');
+    res.clearCookie('refreshToken');
+
+    res.json({ message: 'Logout efetuado com sucesso' });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+

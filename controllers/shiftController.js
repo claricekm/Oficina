@@ -1,39 +1,23 @@
-/**
- * CONTROLADOR DE TURNOS (Shift Schedule)
- * * Gere os horários de trabalho dos mecânicos.
- * * Permite ao Admin definir quando cada mecânico está disponível para receber marcações.
- * * @module controllers/shiftController
- */
-
 const Shift = require('../models/Shift');
 const User = require('../models/User');
 
-/**
- * CRIAR TURNO
- * * Define um dia de trabalho para um mecânico específico.
- * * Validações de Integridade:
- * * 1. Apenas Admin pode criar.
- * * 2. O mecânico tem de pertencer à oficina do Admin.
- * * 3. Não permite duplicidade (dois turnos para o mesmo mecânico no mesmo dia).
- * * @param req - Body com mechanicId, date, startTime, endTime, maxBookings
- * @param res - Retorna o turno criado com dados populados
- */
+// Create shift (admin only)
 exports.createShift = async (req, res) => {
   try {
     const { mechanicId, date, startTime, endTime, maxBookings } = req.body;
 
-    // Verificar se é admin
+    // Check if user is admin
     if (req.user.role !== 'admin') {
       return res.status(403).json({ message: 'Apenas admins podem criar turnos' });
     }
 
-    // Verificar se o mecânico pertence a esta oficina
+    // Verify mechanic belongs to same workshop
     const mechanic = await User.findById(mechanicId);
     if (!mechanic || mechanic.workshop.toString() !== req.user.workshop) {
       return res.status(400).json({ message: 'Mecânico inválido ou não pertence à sua oficina' });
     }
 
-    // Evitar sobreposição de turnos no mesmo dia
+    // Check if shift already exists for this mechanic on this date
     const existingShift = await Shift.findOne({
       mechanic: mechanicId,
       date: new Date(date)
@@ -66,18 +50,14 @@ exports.createShift = async (req, res) => {
   }
 };
 
-/**
- * LISTAR TURNOS DA OFICINA
- * * Útil para a vista de calendário do Admin ("Quem está a trabalhar esta semana?").
- * * Suporta filtragem por intervalo de datas (startDate, endDate).
- */
+// Get shifts by workshop
 exports.getShiftsByWorkshop = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
 
     let query = { workshop: req.params.workshopId };
 
-    // Filtro de data (se fornecido na URL)
+    // Filter by date range if provided
     if (startDate && endDate) {
       query.date = {
         $gte: new Date(startDate),
@@ -96,10 +76,7 @@ exports.getShiftsByWorkshop = async (req, res) => {
   }
 };
 
-/**
- * LISTAR TURNOS DO MECÂNICO
- * * Permite ao mecânico ver a sua própria escala de trabalho.
- */
+// Get shifts by mechanic
 exports.getShiftsByMechanic = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
@@ -124,10 +101,7 @@ exports.getShiftsByMechanic = async (req, res) => {
   }
 };
 
-/**
- * OBTER UM TURNO
- * * Detalhes de um turno específico.
- */
+// Get single shift
 exports.getShift = async (req, res) => {
   try {
     const shift = await Shift.findById(req.params.id)
@@ -145,11 +119,7 @@ exports.getShift = async (req, res) => {
   }
 };
 
-/**
- * ATUALIZAR TURNO
- * * Permite alterar horário ou capacidade máxima de atendimentos.
- * * Apenas o Admin da oficina pode fazer alterações.
- */
+// Update shift (admin only)
 exports.updateShift = async (req, res) => {
   try {
     const shift = await Shift.findById(req.params.id);
@@ -158,7 +128,7 @@ exports.updateShift = async (req, res) => {
       return res.status(404).json({ message: 'Turno não encontrado' });
     }
 
-    // Verificação de segurança (Dono da Oficina)
+    // Check if user is admin of this workshop
     if (req.user.role !== 'admin' || shift.workshop.toString() !== req.user.workshop) {
       return res.status(403).json({ message: 'Sem permissão' });
     }
@@ -181,11 +151,7 @@ exports.updateShift = async (req, res) => {
   }
 };
 
-/**
- * APAGAR TURNO
- * * Remove o turno da escala.
- * * Apenas Admin da oficina.
- */
+// Delete shift (admin only)
 exports.deleteShift = async (req, res) => {
   try {
     const shift = await Shift.findById(req.params.id);
@@ -194,7 +160,7 @@ exports.deleteShift = async (req, res) => {
       return res.status(404).json({ message: 'Turno não encontrado' });
     }
 
-    // Verificação de permissão
+    // Check permission
     if (req.user.role !== 'admin' || shift.workshop.toString() !== req.user.workshop) {
       return res.status(403).json({ message: 'Sem permissão' });
     }

@@ -1,50 +1,27 @@
-/**
- * ROTAS DE AUTENTICAÇÃO (Auth Routes)
- * * Define os pontos de entrada para Login e Registos.
- * * @module routes/authRoutes
- */
-
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
-
-// Importar middlewares de segurança
 const authMiddleware = require('../middleware/authMiddleware');
 const { adminOnly } = require('../middleware/rbacMiddleware');
 
 console.log('✅ authRoutes.js carregado');
 
-/**
- * REGISTAR ADMIN (Dono da Oficina)
- * * Rota pública. Cria o utilizador Admin e a Oficina ao mesmo tempo.
- * * POST /api/auth/register/admin
- */
+// POST /api/auth/register/admin - Register Admin + Workshop
 router.post('/register/admin', authController.registerAdmin);
 
-/**
- * REGISTAR CLIENTE
- * * Rota pública. Qualquer pessoa pode criar conta para marcar serviços.
- * * POST /api/auth/register/customer
- */
+// POST /api/auth/register/customer - Register Customer
 router.post('/register/customer', authController.registerCustomer);
 
-/**
- * REGISTAR MECÂNICO (Staff)
- * * Rota Protegida: Apenas um Admin autenticado pode criar contas para mecânicos.
- * * POST /api/auth/register/mechanic
- */
-router.post(
-  '/register/mechanic', 
-  authMiddleware, // 1. Verifica se quem pede está logado
-  adminOnly,      // 2. Verifica se quem pede é Admin
-  authController.registerMechanic // 3. Executa a criação
-);
+// POST /api/auth/register/mechanic - Register Mechanic (Admin only)
+router.post('/register/mechanic', authMiddleware, adminOnly, authController.registerMechanic);
 
-/**
- * LOGIN
- * * Rota pública. Retorna o Token JWT.
- * * POST /api/auth/login
- */
+// POST /api/auth/login - Login
 router.post('/login', authController.login);
+
+// POST /api/auth/refresh - Refresh access token using refresh token
+router.post('/refresh', authController.refresh);
+
+// POST /api/auth/logout - Logout and clear tokens
+router.post('/logout', authController.logout);
 
 module.exports = router;

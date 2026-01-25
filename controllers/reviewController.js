@@ -1,34 +1,17 @@
-/**
- * CONTROLADOR DE AVALIAÇÕES (Reviews)
- * * Gere o sistema de feedback. Permite que clientes avaliem serviços concluídos
- * e que administradores moderem esses comentários.
- * * @module controllers/reviewController
- */
-
 const Review = require('../models/Review');
 const Booking = require('../models/Booking');
 
-/**
- * CRIAR AVALIAÇÃO
- * * Permite ao cliente avaliar um serviço.
- * * Regras de Negócio:
- * * 1. Apenas clientes podem avaliar.
- * * 2. A marcação deve existir e pertencer ao cliente.
- * * 3. O estado da marcação deve ser 'completed'.
- * * 4. Não permite duplicidade (uma avaliação por marcação).
- * * @param req - Body com workshopId, bookingId, rating (1-5) e comment
- * @param res - Retorna a avaliação criada
- */
+// Create review (customer only, after completed booking)
 exports.createReview = async (req, res) => {
   try {
     const { workshopId, bookingId, rating, comment } = req.body;
 
-    // Verificar se é cliente
+    // Check if user is customer
     if (req.user.role !== 'customer') {
       return res.status(403).json({ message: 'Apenas clientes podem avaliar' });
     }
 
-    // Se houver bookingId, verificar integridade
+    // If bookingId provided, verify it's completed and belongs to user
     if (bookingId) {
       const booking = await Booking.findById(bookingId);
       
@@ -40,12 +23,11 @@ exports.createReview = async (req, res) => {
         return res.status(403).json({ message: 'Sem permissão' });
       }
 
-      // Regra Crítica: Serviço tem de estar acabado
       if (booking.status !== 'completed') {
         return res.status(400).json({ message: 'Só pode avaliar após serviço concluído' });
       }
 
-      // Evitar spam/avaliações duplicadas
+      // Check if already reviewed
       const existingReview = await Review.findOne({ booking: bookingId });
       if (existingReview) {
         return res.status(400).json({ message: 'Já avaliou esta marcação' });
@@ -74,21 +56,17 @@ exports.createReview = async (req, res) => {
   }
 };
 
-/**
- * OBTER AVALIAÇÕES DA OFICINA (Público)
- * * Lista as avaliações visíveis de uma oficina e calcula a média de estrelas.
- * * @param req - workshopId nos parâmetros da URL
- */
+// Get reviews by workshop
 exports.getReviewsByWorkshop = async (req, res) => {
   try {
     const reviews = await Review.find({ 
       workshop: req.params.workshopId,
-      visible: true // Apenas mostra as que não foram ocultadas pelo admin
+      visible: true 
     })
       .populate('customer', 'name')
       .sort({ createdAt: -1 });
 
-    // Cálculo da Média (Average Rating)
+    // Calculate average rating
     const avgRating = reviews.length > 0
       ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length
       : 0;
@@ -104,10 +82,7 @@ exports.getReviewsByWorkshop = async (req, res) => {
   }
 };
 
-/**
- * MINHAS AVALIAÇÕES (Cliente)
- * * Histórico de feedback dado pelo cliente logado.
- */
+// Get my reviews (customer)
 exports.getMyReviews = async (req, res) => {
   try {
     const reviews = await Review.find({ customer: req.user.id })
@@ -121,11 +96,7 @@ exports.getMyReviews = async (req, res) => {
   }
 };
 
-/**
- * MODERAR AVALIAÇÃO (Admin Only)
- * * Permite ao dono da oficina ocultar comentários ofensivos ou impróprios.
- * * Não apaga o registo, apenas muda a flag 'visible'.
- */
+// Update review visibility (admin only)
 exports.updateReviewVisibility = async (req, res) => {
   try {
     const { visible } = req.body;
@@ -136,7 +107,7 @@ exports.updateReviewVisibility = async (req, res) => {
       return res.status(404).json({ message: 'Avaliação não encontrada' });
     }
 
-    // Verificar se o admin é dono da oficina avaliada
+    // Check if user is admin of this workshop
     if (req.user.role !== 'admin' || review.workshop.toString() !== req.user.workshop) {
       return res.status(403).json({ message: 'Sem permissão' });
     }
@@ -154,12 +125,7 @@ exports.updateReviewVisibility = async (req, res) => {
   }
 };
 
-/**
- * APAGAR AVALIAÇÃO
- * * Permissões Híbridas:
- * * 1. O Cliente pode apagar a sua própria avaliação.
- * * 2. O Admin da oficina pode apagar avaliações da sua oficina.
- */
+// Delete review (customer own review or admin)
 exports.deleteReview = async (req, res) => {
   try {
     const review = await Review.findById(req.params.id);
@@ -168,7 +134,7 @@ exports.deleteReview = async (req, res) => {
       return res.status(404).json({ message: 'Avaliação não encontrada' });
     }
 
-    // Lógica de Permissões
+    // Check permissions
     const canDelete = 
       req.user.role === 'customer' && review.customer.toString() === req.user.id ||
       req.user.role === 'admin' && review.workshop.toString() === req.user.workshop;
