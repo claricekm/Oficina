@@ -1,9 +1,25 @@
+/**
+ * CONTROLADOR DO ADMIN (Dashboard & Gestão)
+ * * Agrega estatísticas vitais para o painel de gestão (KPIs).
+ * * Gere a equipa de mecânicos da oficina.
+ * * @module controllers/adminController
+ */
+
 const Booking = require('../models/Booking');
 const User = require('../models/User');
 const Service = require('../models/Service');
 const Review = require('../models/Review');
 
-// Get workshop dashboard statistics (admin only)
+/**
+ * ESTATÍSTICAS DO DASHBOARD
+ * * Este é o "cérebro" do painel do Admin.
+ * * Realiza múltiplas consultas paralelas para obter:
+ * * 1. Volume de marcações (Hoje, Semana, Mês, Totais por estado).
+ * * 2. Receita Financeira (Cruzando dados de Booking com Service para somar preços).
+ * * 3. Performance da equipa (Média de avaliações).
+ * * 4. Agenda operacional do dia atual.
+ * * @param req - Requer utilizador Admin com oficina associada
+ */
 exports.getDashboardStats = async (req, res) => {
   try {
     const workshopId = req.user.workshop;
@@ -12,23 +28,25 @@ exports.getDashboardStats = async (req, res) => {
       return res.status(400).json({ message: 'Admin não está associado a uma oficina' });
     }
 
-    // Get current date boundaries
+    // --- CÁLCULO DE DATAS ---
+    // Definir o início e fim do dia de hoje
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const todayEnd = new Date(todayStart);
     todayEnd.setDate(todayEnd.getDate() + 1);
 
-    // Week boundaries (Monday to Sunday)
+    // Definir limites da Semana (Segunda a Domingo)
     const weekStart = new Date(todayStart);
     weekStart.setDate(weekStart.getDate() - weekStart.getDay() + 1);
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekEnd.getDate() + 7);
 
-    // Month boundaries
+    // Definir limites do Mês atual
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
-    // Booking counts by status
+    // --- CONSULTAS PARALELAS (Performance) ---
+    // Promise.all executa todas as contagens ao mesmo tempo para ser mais rápido
     const [
       todayBookings,
       pendingBookings,
@@ -39,58 +57,63 @@ exports.getDashboardStats = async (req, res) => {
       weekBookings,
       monthBookings
     ] = await Promise.all([
-      // Today's bookings
+      // Marcações de Hoje
       Booking.countDocuments({
         workshop: workshopId,
         startTime: { $gte: todayStart, $lt: todayEnd }
       }),
-      // Pending
+      // Pendentes
       Booking.countDocuments({
         workshop: workshopId,
         status: 'pending'
       }),
-      // Confirmed
+      // Confirmadas
       Booking.countDocuments({
         workshop: workshopId,
         status: 'confirmed'
       }),
-      // In Progress
+      // Em Progresso
       Booking.countDocuments({
         workshop: workshopId,
         status: 'in_progress'
       }),
-      // Completed (all time)
+      // Concluídas (Total Histórico)
       Booking.countDocuments({
         workshop: workshopId,
         status: 'completed'
       }),
-      // Cancelled
+      // Canceladas
       Booking.countDocuments({
         workshop: workshopId,
         status: 'cancelled'
       }),
-      // This week bookings
+      // Volume Semanal
       Booking.countDocuments({
         workshop: workshopId,
         startTime: { $gte: weekStart, $lt: weekEnd }
       }),
-      // This month bookings
+      // Volume Mensal
       Booking.countDocuments({
         workshop: workshopId,
         startTime: { $gte: monthStart, $lt: monthEnd }
       })
     ]);
 
-    // Revenue calculations (sum of service prices for completed bookings)
+    // --- CÁLCULO DE RECEITA (Aggregation Pipeline) ---
+    // O MongoDB soma o preço dos serviços das marcações 'completed'.
+    // É necessário fazer 'lookup' (join) porque o preço está na coleção Services.
+    
+    
+
     const revenueAggregation = await Booking.aggregate([
       {
         $match: {
           workshop: workshopId,
-          status: 'completed'
+          status: 'completed' // Apenas conta dinheiro de serviços acabados
         }
       },
       {
-        $lookup: {
+        $lookup: { // Join com a tabela de serviços
           from: 'services',
           localField: 'service',
           foreignField: '_id',
@@ -98,19 +121,19 @@ exports.getDashboardStats = async (req, res) => {
         }
       },
       {
-        $unwind: '$serviceData'
+        $unwind: '$serviceData' // Aplaina o array resultante do join
       },
       {
         $group: {
           _id: null,
-          totalRevenue: { $sum: '$serviceData.price' }
+          totalRevenue: { $sum: '$serviceData.price' } // Soma final
         }
       }
     ]);
 
     const totalRevenue = revenueAggregation[0]?.totalRevenue || 0;
 
-    // Monthly revenue
+    // Receita Mensal (Mesma lógica, filtro de data diferente)
     const monthlyRevenueAggregation = await Booking.aggregate([
       {
         $match: {
@@ -140,18 +163,18 @@ exports.getDashboardStats = async (req, res) => {
 
     const monthlyRevenue = monthlyRevenueAggregation[0]?.monthlyRevenue || 0;
 
-    // Staff count (mechanics in this workshop)
+    // Contagem de Staff (Mecânicos)
     const mechanicsCount = await User.countDocuments({
       workshop: workshopId,
       role: 'mechanic'
     });
 
-    // Services count
+    // Contagem de Serviços no Menu
     const servicesCount = await Service.countDocuments({
       workshop: workshopId
     });
 
-    // Average rating from reviews
+    // Média de Avaliações (Rating)
     const reviewStats = await Review.aggregate([
       {
         $match: {
@@ -171,7 +194,7 @@ exports.getDashboardStats = async (req, res) => {
     const averageRating = reviewStats[0]?.averageRating?.toFixed(1) || 0;
     const totalReviews = reviewStats[0]?.totalReviews || 0;
 
-    // Recent bookings (last 5)
+    // Últimas 5 marcações (para tabela de "Atividade Recente")
     const recentBookings = await Booking.find({ workshop: workshopId })
       .populate('customer', 'name email')
       .populate('mechanic', 'name')
@@ -180,7 +203,7 @@ exports.getDashboardStats = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(5);
 
-    // Today's schedule
+    // Agenda do Dia (Ordenada por hora)
     const todaySchedule = await Booking.find({
       workshop: workshopId,
       startTime: { $gte: todayStart, $lt: todayEnd }
@@ -191,6 +214,7 @@ exports.getDashboardStats = async (req, res) => {
       .populate('vehicle', 'brand model licensePlate')
       .sort({ startTime: 1 });
 
+    // Construção do Objeto de Resposta Final
     res.json({
       bookings: {
         today: todayBookings,
@@ -226,7 +250,10 @@ exports.getDashboardStats = async (req, res) => {
   }
 };
 
-// Get mechanics list for admin workshop
+/**
+ * LISTAR MECÂNICOS
+ * * Retorna lista simples dos funcionários da oficina para gestão de RH.
+ */
 exports.getMechanics = async (req, res) => {
   try {
     const workshopId = req.user.workshop;
@@ -247,25 +274,31 @@ exports.getMechanics = async (req, res) => {
   }
 };
 
-// Delete mechanic (admin only)
+/**
+ * REMOVER MECÂNICO
+ * * Apaga um funcionário do sistema.
+ * * REGRA DE INTEGRIDADE: Impede a remoção se o mecânico tiver
+ * * marcações ativas (pendentes, confirmadas ou em progresso) para evitar
+ * * deixar clientes sem atendimento ("Marcações órfãs").
+ */
 exports.deleteMechanic = async (req, res) => {
   try {
     const workshopId = req.user.workshop;
     const mechanicId = req.params.id;
 
-    // Find mechanic
+    // Validar existência
     const mechanic = await User.findById(mechanicId);
 
     if (!mechanic) {
       return res.status(404).json({ message: 'Mecânico não encontrado' });
     }
 
-    // Check if mechanic belongs to admin's workshop
+    // Validar permissão (Dono da oficina)
     if (mechanic.workshop.toString() !== workshopId.toString()) {
       return res.status(403).json({ message: 'Sem permissão para remover este mecânico' });
     }
 
-    // Check if mechanic has active bookings
+    // Validar se está livre de serviços
     const activeBookings = await Booking.countDocuments({
       mechanic: mechanicId,
       status: { $in: ['pending', 'confirmed', 'in_progress'] }
