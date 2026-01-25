@@ -1,37 +1,91 @@
+/**
+ * ROTAS DE AGENDAMENTOS (Booking Routes)
+ * * Define os endpoints para gestão de marcações.
+ * * Aplica camadas de segurança: Autenticação (Quem és?) e Autorização (O que podes fazer?).
+ * * @module routes/bookingRoutes
+ */
+
 const express = require('express');
 const router = express.Router();
 const bookingController = require('../controllers/bookingController');
 const authMiddleware = require('../middleware/authMiddleware');
+// Importação dos guardas de rota (RBAC) para segurança granular
+const { 
+  customerOnly, 
+  adminOnly, 
+  adminOrMechanic, 
+  adminOrCustomer 
+} = require('../middleware/rbacMiddleware');
 
-// POST /api/bookings/check-availability - Check available slots (public/customer)
-// This route must come BEFORE /:id routes to avoid conflicts
+// --- ROTAS PÚBLICAS / UTILITÁRIAS ---
+
+/**
+ * VERIFICAR DISPONIBILIDADE
+ * * POST /api/bookings/check-availability
+ * * Verifica slots livres sem criar reserva.
+ * * Nota: Deve vir ANTES das rotas com :id para não confundir o Express.
+ */
 router.post('/check-availability', bookingController.checkAvailability);
 
-// GET /api/bookings - Get bookings (filtered by role)
-// Customer: only their bookings
-// Mechanic: only assigned bookings
-// Admin: all workshop bookings
+// --- ROTAS DE GESTÃO (Admin) ---
+
+/**
+ * DISPONIBILIDADE DOS MECÂNICOS
+ * * GET /api/bookings/mechanics-availability
+ * * Retorna horas semanais de cada mecânico para ajudar na atribuição.
+ */
+router.get('/mechanics-availability', authMiddleware, adminOnly, bookingController.getMechanicsAvailability);
+
+// --- ROTAS DE UTILIDADE (Cliente) ---
+
+/**
+ * POLLING DE CONCLUSÃO
+ * * GET /api/bookings/recently-completed
+ * * Endpoint leve para a App verificar se o carro ficou pronto.
+ */
+router.get('/recently-completed', authMiddleware, bookingController.getRecentlyCompletedBookings);
+
+// --- ROTAS CRUD ---
+
+/**
+ * LISTAR AGENDAMENTOS
+ * * GET /api/bookings
+ * * O controlador filtra automaticamente: Cliente vê os seus, Admin vê todos.
+ */
 router.get('/', authMiddleware, bookingController.getBookings);
 
-// GET /api/bookings/:id - Get single booking details
-// Requires authentication and ownership validation
+/**
+ * DETALHES DO AGENDAMENTO
+ * * GET /api/bookings/:id
+ */
 router.get('/:id', authMiddleware, bookingController.getBooking);
 
-// POST /api/bookings - Create new booking (customer only)
-// Validates vehicle ownership, service availability, and time conflicts
-router.post('/', authMiddleware, bookingController.createBooking);
+/**
+ * CRIAR AGENDAMENTO
+ * * POST /api/bookings
+ * * Apenas clientes podem iniciar um pedido de serviço.
+ */
+router.post('/', authMiddleware, customerOnly, bookingController.createBooking);
 
-// PUT /api/bookings/:id/status - Update booking status (mechanic/admin)
-// Allowed statuses: pending, confirmed, in_progress, completed, cancelled
-router.put('/:id/status', authMiddleware, bookingController.updateBookingStatus);
+/**
+ * ATUALIZAR STATUS
+ * * PUT /api/bookings/:id/status
+ * * Mecânicos atualizam o progresso (pending -> in_progress -> completed).
+ */
+router.put('/:id/status', authMiddleware, adminOrMechanic, bookingController.updateBookingStatus);
 
-// PUT /api/bookings/:id/cancel - Cancel booking (customer/admin)
-// Customer can cancel their own bookings
-// Admin can cancel any booking from their workshop
-router.put('/:id/cancel', authMiddleware, bookingController.cancelBooking);
+/**
+ * CANCELAR AGENDAMENTO
+ * * PUT /api/bookings/:id/cancel
+ * * Clientes cancelam os seus, Admin cancela qualquer um.
+ */
+router.put('/:id/cancel', authMiddleware, adminOrCustomer, bookingController.cancelBooking);
 
-// PUT /api/bookings/:id/assign - Assign mechanic to booking (admin only)
-// Validates mechanic availability and updates booking status to confirmed
-router.put('/:id/assign', authMiddleware, bookingController.assignMechanic);
+/**
+ * ATRIBUIR MECÂNICO
+ * * PUT /api/bookings/:id/assign
+ * * Apenas Admin pode decidir quem faz o serviço.
+ */
+router.put('/:id/assign', authMiddleware, adminOnly, bookingController.assignMechanic);
 
 module.exports = router;
