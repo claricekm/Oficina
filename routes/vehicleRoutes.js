@@ -1,23 +1,85 @@
+/**
+ * ROTAS DE VEÍCULOS (Vehicle Routes)
+ * * Divide-se em duas partes:
+ * * 1. Dados Estáticos (Público): Fornece listas de Marcas/Modelos para formulários.
+ * * 2. Gestão de Veículos (Protegido): CRUD dos carros do próprio cliente.
+ * * @module routes/vehicleRoutes
+ */
+
 const express = require('express');
 const router = express.Router();
 const vehicleController = require('../controllers/vehicleController');
 const authMiddleware = require('../middleware/authMiddleware');
+const { customerOnly } = require('../middleware/rbacMiddleware');
 
-// All routes are protected (need login)
+console.log('✅ vehicleRoutes.js carregado');
 
-// GET /api/vehicles - Get my vehicles
-router.get('/', authMiddleware, vehicleController.getMyVehicles);
+// ==========================================
+// 1. ROTAS DE DADOS ESTÁTICOS (Dropdowns em Cascata)
+// ==========================================
+// Estas rotas não requerem login, pois são dados genéricos do mercado.
 
-// GET /api/vehicles/:id - Get single vehicle
-router.get('/:id', authMiddleware, vehicleController.getVehicle);
+/**
+ * LISTAR MARCAS
+ * * GET /api/vehicles/makes
+ * * Retorna: ['Audi', 'BMW', 'Renault', ...]
+ */
+router.get('/makes', vehicleController.getVehicleMakes);
 
-// POST /api/vehicles - Create vehicle
-router.post('/', authMiddleware, vehicleController.createVehicle);
+/**
+ * LISTAR MODELOS DA MARCA
+ * * GET /api/vehicles/makes/:make/models
+ * * Ex: /api/vehicles/makes/Tesla/models -> Retorna ['Model 3', 'Model Y', ...]
+ */
+router.get('/makes/:make/models', vehicleController.getVehicleModels);
 
-// PUT /api/vehicles/:id - Update vehicle
-router.put('/:id', authMiddleware, vehicleController.updateVehicle);
+/**
+ * LISTAR COMBUSTÍVEIS DO MODELO
+ * * GET /api/vehicles/makes/:make/models/:model/fuel-types
+ * * Ex: .../Tesla/models/Model 3/fuel-types -> Retorna apenas 'Elétrico'
+ */
+router.get('/makes/:make/models/:model/fuel-types', vehicleController.getVehicleFuelTypes);
 
-// DELETE /api/vehicles/:id - Delete vehicle
-router.delete('/:id', authMiddleware, vehicleController.deleteVehicle);
+/**
+ * LISTAR TODOS OS COMBUSTÍVEIS
+ * * GET /api/vehicles/fuel-types
+ * * Lista mestre para filtros gerais.
+ */
+router.get('/fuel-types', vehicleController.getAllFuelTypes);
+
+// ==========================================
+// 2. ROTAS DE GESTÃO DO CLIENTE (Meus Veículos)
+// ==========================================
+// Requerem Autenticação + Role de Cliente
+
+/**
+ * LISTAR MEUS VEÍCULOS
+ * * GET /api/vehicles
+ */
+router.get('/', authMiddleware, customerOnly, vehicleController.getMyVehicles);
+
+/**
+ * DETALHES DO VEÍCULO
+ * * GET /api/vehicles/:id
+ */
+router.get('/:id', authMiddleware, customerOnly, vehicleController.getVehicle);
+
+/**
+ * ADICIONAR VEÍCULO
+ * * POST /api/vehicles
+ */
+router.post('/', authMiddleware, customerOnly, vehicleController.createVehicle);
+
+/**
+ * ATUALIZAR VEÍCULO
+ * * PUT /api/vehicles/:id
+ */
+router.put('/:id', authMiddleware, customerOnly, vehicleController.updateVehicle);
+
+/**
+ * REMOVER VEÍCULO
+ * * DELETE /api/vehicles/:id
+ */
+router.delete('/:id', authMiddleware, customerOnly, vehicleController.deleteVehicle);
 
 module.exports = router;
