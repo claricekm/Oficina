@@ -1,13 +1,26 @@
+/**
+ * CONTROLADOR DE SIMULAÇÃO DE PREÇOS
+ * * Permite aos clientes simular o custo de reparações antes de agendar.
+ * * Calcula totais baseados nos serviços selecionados.
+ * * @module controllers/priceSimulationController
+ */
+
 const PriceSimulation = require('../models/PriceSimulation');
 const Service = require('../models/Service');
 const Vehicle = require('../models/Vehicle');
 
-// Create price simulation (authenticated users)
+/**
+ * CRIAR SIMULAÇÃO
+ * * Calcula o preço total e duração estimada para um conjunto de serviços.
+ * * Garante que os preços são calculados no backend (segurança) e não no frontend.
+ * * @param req - Body com workshopId, vehicleId (opcional) e lista de serviceIds
+ * @param res - Retorna o objeto de simulação com totais calculados
+ */
 exports.createSimulation = async (req, res) => {
   try {
     const { workshopId, vehicleId, serviceIds } = req.body;
 
-    // Validate vehicle belongs to user (if vehicleId provided)
+    // Validar se o veículo pertence ao utilizador (apenas se enviado)
     if (vehicleId) {
       const vehicle = await Vehicle.findById(vehicleId);
       if (!vehicle || vehicle.owner.toString() !== req.user.id) {
@@ -15,7 +28,8 @@ exports.createSimulation = async (req, res) => {
       }
     }
 
-    // Get all services and calculate total
+    // Buscar serviços na base de dados para obter preços reais
+    // (Impede que o utilizador manipule preços enviando valores falsos)
     const services = await Service.find({ 
       _id: { $in: serviceIds },
       workshop: workshopId 
@@ -25,6 +39,7 @@ exports.createSimulation = async (req, res) => {
       return res.status(400).json({ message: 'Um ou mais serviços inválidos' });
     }
 
+    // Cálculos matemáticos no servidor
     const totalPrice = services.reduce((sum, service) => sum + service.price, 0);
     const totalDuration = services.reduce((sum, service) => sum + service.durationMinutes, 0);
 
@@ -52,7 +67,10 @@ exports.createSimulation = async (req, res) => {
   }
 };
 
-// Get my simulations (customer)
+/**
+ * OBTER MINHAS SIMULAÇÕES (Cliente)
+ * * Lista histórico de simulações do utilizador logado.
+ */
 exports.getMySimulations = async (req, res) => {
   try {
     const simulations = await PriceSimulation.find({ customer: req.user.id })
@@ -68,7 +86,11 @@ exports.getMySimulations = async (req, res) => {
   }
 };
 
-// Get single simulation
+/**
+ * OBTER UMA SIMULAÇÃO
+ * * Detalhes de uma simulação específica.
+ * * Protegido: Apenas o dono pode ver.
+ */
 exports.getSimulation = async (req, res) => {
   try {
     const simulation = await PriceSimulation.findById(req.params.id)
@@ -80,7 +102,7 @@ exports.getSimulation = async (req, res) => {
       return res.status(404).json({ message: 'Simulação não encontrada' });
     }
 
-    // Check if belongs to user
+    // Verificação de segurança
     if (simulation.customer.toString() !== req.user.id) {
       return res.status(403).json({ message: 'Sem permissão' });
     }
@@ -92,7 +114,10 @@ exports.getSimulation = async (req, res) => {
   }
 };
 
-// Delete simulation (customer)
+/**
+ * APAGAR SIMULAÇÃO
+ * * Permite ao cliente limpar seu histórico de simulações.
+ */
 exports.deleteSimulation = async (req, res) => {
   try {
     const simulation = await PriceSimulation.findById(req.params.id);
@@ -101,7 +126,7 @@ exports.deleteSimulation = async (req, res) => {
       return res.status(404).json({ message: 'Simulação não encontrada' });
     }
 
-    // Check if belongs to user
+    // Verificação de segurança
     if (simulation.customer.toString() !== req.user.id) {
       return res.status(403).json({ message: 'Sem permissão' });
     }
@@ -115,10 +140,14 @@ exports.deleteSimulation = async (req, res) => {
   }
 };
 
-// Get simulations by workshop (admin only)
+/**
+ * LISTAR SIMULAÇÕES POR OFICINA (Admin)
+ * * Permite ao dono da oficina ver que tipos de orçamentos os clientes andam a simular.
+ * * Útil para análise de negócio (leads).
+ */
 exports.getSimulationsByWorkshop = async (req, res) => {
   try {
-    // Check if user is admin of this workshop
+    // Apenas o Admin daquela oficina específica pode ver
     if (req.user.role !== 'admin' || req.user.workshop !== req.params.workshopId) {
       return res.status(403).json({ message: 'Sem permissão' });
     }
