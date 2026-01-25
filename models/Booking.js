@@ -40,7 +40,37 @@ const BookingSchema = new mongoose.Schema({
     default: 'pending'
   },
 
-  notes: { type: String }
+  notes: { type: String },
+
+  // Auto-completion tracking
+  autoCompleted: {
+    type: Boolean,
+    default: false
+  },
+  autoCompletedAt: {
+    type: Date,
+    default: null
+  },
+
+  // Payment tracking
+  paymentStatus: {
+    type: String,
+    enum: ['pending', 'paid', 'failed', 'refunded'],
+    default: 'pending'
+  },
+  paymentMethod: {
+    type: String,
+    enum: ['card', 'mbway', 'multibanco', 'simulated'],
+    default: null
+  },
+  paidAt: {
+    type: Date,
+    default: null
+  },
+  customerNif: {
+    type: String,
+    default: null
+  }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Booking', BookingSchema);
