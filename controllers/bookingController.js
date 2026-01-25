@@ -2,6 +2,77 @@ const Booking = require('../models/Booking');
 const Service = require('../models/Service');
 const Vehicle = require('../models/Vehicle');
 const Workshop = require('../models/Workshop');
+const User = require('../models/User');
+
+// Constants
+const MAX_WEEKLY_HOURS = 40;
+const MIN_HOURS_NOTICE = 48; // Minimum hours in advance for booking
+
+// Helper: Get start and end of current week (Monday to Sunday)
+const getWeekBounds = (date = new Date()) => {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust for Monday start
+
+  const weekStart = new Date(d.setDate(diff));
+  weekStart.setHours(0, 0, 0, 0);
+
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+
+  return { weekStart, weekEnd };
+};
+
+// Helper: Calculate mechanic's weekly hours
+const getMechanicWeeklyHours = async (mechanicId, weekStart, weekEnd) => {
+  const bookings = await Booking.find({
+    mechanic: mechanicId,
+    status: { $nin: ['cancelled'] },
+    startTime: { $gte: weekStart, $lt: weekEnd }
+  }).populate('service');
+
+  const totalMinutes = bookings.reduce((sum, booking) => {
+    return sum + (booking.service?.durationMinutes || 0);
+  }, 0);
+
+  return totalMinutes / 60; // Return hours
+};
+
+// Helper: Check if date is weekend (Saturday=6, Sunday=0)
+const isWeekend = (date) => {
+  const day = new Date(date).getDay();
+  return day === 0 || day === 6;
+};
+
+// Helper: Check if booking meets minimum notice requirement
+const meetsMinimumNotice = (startTime) => {
+  const now = new Date();
+  const start = new Date(startTime);
+  const hoursUntilBooking = (start - now) / (1000 * 60 * 60);
+  return hoursUntilBooking >= MIN_HOURS_NOTICE;
+};
+
+// Helper: Auto-complete expired bookings
+const autoCompleteExpiredBookings = async (workshopId) => {
+  const now = new Date();
+
+  const result = await Booking.updateMany(
+    {
+      workshop: workshopId,
+      status: { $in: ['confirmed', 'in_progress'] },
+      endTime: { $lte: now }
+    },
+    {
+      $set: {
+        status: 'completed',
+        autoCompleted: true,
+        autoCompletedAt: now
+      }
+    }
+  );
+
+  return result.modifiedCount;
+};
 
 // Check availability for a specific date and services
 exports.checkAvailability = async (req, res) => {
@@ -10,8 +81,28 @@ exports.checkAvailability = async (req, res) => {
 
     // Validate required fields
     if (!workshopId || !date || !serviceIds || serviceIds.length === 0) {
-      return res.status(400).json({ 
-        message: 'Workshop, data e serviços são obrigatórios' 
+      return res.status(400).json({
+        message: 'Workshop, data e serviços são obrigatórios'
+      });
+    }
+
+    // Check if requested date is a weekend
+    if (isWeekend(date)) {
+      return res.status(400).json({
+        message: 'Não aceitamos marcações nos fins de semana (Sábado e Domingo)',
+        isWeekend: true
+      });
+    }
+
+    // Check minimum notice (48h) - only for the date itself, time slot check comes later
+    const requestedDate = new Date(date);
+    const minDate = new Date();
+    minDate.setHours(minDate.getHours() + MIN_HOURS_NOTICE);
+
+    if (requestedDate < minDate.setHours(0, 0, 0, 0)) {
+      return res.status(400).json({
+        message: `Marcações requerem um mínimo de ${MIN_HOURS_NOTICE} horas de antecedência`,
+        minNoticeHours: MIN_HOURS_NOTICE
       });
     }
 
@@ -30,7 +121,7 @@ exports.checkAvailability = async (req, res) => {
     const totalDuration = services.reduce((sum, service) => sum + service.durationMinutes, 0);
 
     // Set date range (start of day to start of next day)
-    const requestedDate = new Date(date);
+    // requestedDate already declared above, just reset hours
     requestedDate.setHours(0, 0, 0, 0);
 
     const nextDay = new Date(requestedDate);
@@ -137,6 +228,20 @@ exports.createBooking = async (req, res) => {
       return res.status(400).json({ message: 'Não pode marcar no passado' });
     }
 
+    // Check if booking date is weekend
+    if (isWeekend(start)) {
+      return res.status(400).json({
+        message: 'Não aceitamos marcações nos fins de semana (Sábado e Domingo)'
+      });
+    }
+
+    // Check minimum notice (48h)
+    if (!meetsMinimumNotice(start)) {
+      return res.status(400).json({
+        message: `Marcações requerem um mínimo de ${MIN_HOURS_NOTICE} horas de antecedência`
+      });
+    }
+
     // Check for mechanic conflicts (if mechanic is assigned)
     if (mechanicId) {
       const conflict = await Booking.findOne({
@@ -191,15 +296,36 @@ exports.getBookings = async (req, res) => {
     if (req.user.role === 'customer') {
       query.customer = req.user.id;
     }
-    
+
     // Mechanic sees only their bookings
     if (req.user.role === 'mechanic') {
       query.mechanic = req.user.id;
     }
-    
+
     // Admin sees all bookings from their workshop
     if (req.user.role === 'admin') {
       query.workshop = req.user.workshop;
+      // Auto-complete expired bookings for this workshop
+      await autoCompleteExpiredBookings(req.user.workshop);
+    }
+
+    // For mechanics, also auto-complete their expired bookings
+    if (req.user.role === 'mechanic') {
+      const now = new Date();
+      await Booking.updateMany(
+        {
+          mechanic: req.user.id,
+          status: { $in: ['confirmed', 'in_progress'] },
+          endTime: { $lte: now }
+        },
+        {
+          $set: {
+            status: 'completed',
+            autoCompleted: true,
+            autoCompletedAt: now
+          }
+        }
+      );
     }
 
     const bookings = await Booking.find(query)
@@ -210,7 +336,87 @@ exports.getBookings = async (req, res) => {
       .populate('workshop')
       .sort({ startTime: -1 });
 
+    // For mechanics, categorize bookings
+    if (req.user.role === 'mechanic') {
+      const now = new Date();
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(now);
+      todayEnd.setHours(23, 59, 59, 999);
+
+      const categorized = {
+        active: bookings.filter(b =>
+          b.status !== 'completed' &&
+          b.status !== 'cancelled' &&
+          new Date(b.startTime) <= now &&
+          new Date(b.endTime) > now
+        ),
+        future: bookings.filter(b =>
+          b.status !== 'completed' &&
+          b.status !== 'cancelled' &&
+          new Date(b.startTime) > now
+        ),
+        completed: bookings.filter(b => b.status === 'completed')
+      };
+
+      return res.json({
+        bookings,
+        categorized,
+        counts: {
+          active: categorized.active.length,
+          future: categorized.future.length,
+          completed: categorized.completed.length
+        }
+      });
+    }
+
     res.json(bookings);
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get mechanics with weekly availability (admin only)
+exports.getMechanicsAvailability = async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Sem permissão' });
+    }
+
+    const { bookingDate } = req.query;
+    const targetDate = bookingDate ? new Date(bookingDate) : new Date();
+    const { weekStart, weekEnd } = getWeekBounds(targetDate);
+
+    // Get all mechanics for this workshop
+    const mechanics = await User.find({
+      workshop: req.user.workshop,
+      role: 'mechanic'
+    }).select('name email');
+
+    // Calculate weekly hours for each mechanic
+    const mechanicsWithAvailability = await Promise.all(
+      mechanics.map(async (mechanic) => {
+        const weeklyHours = await getMechanicWeeklyHours(mechanic._id, weekStart, weekEnd);
+        const availableHours = MAX_WEEKLY_HOURS - weeklyHours;
+
+        return {
+          _id: mechanic._id,
+          name: mechanic.name,
+          email: mechanic.email,
+          weeklyHours: Math.round(weeklyHours * 10) / 10,
+          availableHours: Math.round(availableHours * 10) / 10,
+          maxHours: MAX_WEEKLY_HOURS,
+          canAcceptMore: availableHours > 0
+        };
+      })
+    );
+
+    res.json({
+      mechanics: mechanicsWithAvailability,
+      weekStart,
+      weekEnd
+    });
 
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -318,13 +524,49 @@ exports.cancelBooking = async (req, res) => {
   }
 };
 
+// Get recently completed bookings for customer (for polling)
+exports.getRecentlyCompletedBookings = async (req, res) => {
+  try {
+    // Only customers can use this endpoint
+    if (req.user.role !== 'customer') {
+      return res.status(403).json({ message: 'Apenas clientes podem aceder a este endpoint' });
+    }
+
+    const { since } = req.query;
+    const sinceDate = since ? new Date(since) : new Date(Date.now() - 24 * 60 * 60 * 1000); // Default: last 24 hours
+
+    const bookings = await Booking.find({
+      customer: req.user.id,
+      status: 'completed',
+      $or: [
+        { autoCompletedAt: { $gte: sinceDate } },
+        { updatedAt: { $gte: sinceDate }, autoCompleted: { $ne: true } }
+      ]
+    })
+      .populate('workshop', 'name')
+      .populate('service', 'name')
+      .populate('vehicle', 'brand model licensePlate')
+      .sort({ updatedAt: -1 });
+
+    res.json({
+      bookings,
+      count: bookings.length,
+      since: sinceDate
+    });
+
+  } catch (error) {
+    console.error('Erro ao obter marcações concluídas:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // Assign mechanic to booking (admin only)
 exports.assignMechanic = async (req, res) => {
   try {
     const { mechanicId } = req.body;
-    
-    const booking = await Booking.findById(req.params.id);
-    
+
+    const booking = await Booking.findById(req.params.id).populate('service');
+
     if (!booking) {
       return res.status(404).json({ message: 'Marcação não encontrada' });
     }
@@ -334,8 +576,9 @@ exports.assignMechanic = async (req, res) => {
       return res.status(403).json({ message: 'Sem permissão' });
     }
 
-    // Check for mechanic conflicts
+    // Check for mechanic time slot conflicts
     const conflict = await Booking.findOne({
+      _id: { $ne: booking._id },
       mechanic: mechanicId,
       status: { $nin: ['cancelled', 'completed'] },
       $or: [
@@ -344,8 +587,22 @@ exports.assignMechanic = async (req, res) => {
     });
 
     if (conflict) {
-      return res.status(409).json({ 
-        message: 'Mecânico não disponível neste horário' 
+      return res.status(409).json({
+        message: 'Mecânico não disponível neste horário'
+      });
+    }
+
+    // Check 40h/week limit
+    const { weekStart, weekEnd } = getWeekBounds(booking.startTime);
+    const currentWeeklyHours = await getMechanicWeeklyHours(mechanicId, weekStart, weekEnd);
+    const serviceDurationHours = (booking.service?.durationMinutes || 0) / 60;
+
+    if (currentWeeklyHours + serviceDurationHours > MAX_WEEKLY_HOURS) {
+      return res.status(400).json({
+        message: `Mecânico excederia o limite de ${MAX_WEEKLY_HOURS}h semanais. Horas atuais: ${currentWeeklyHours.toFixed(1)}h, Serviço: ${serviceDurationHours.toFixed(1)}h`,
+        currentHours: currentWeeklyHours,
+        serviceHours: serviceDurationHours,
+        maxHours: MAX_WEEKLY_HOURS
       });
     }
 
@@ -354,7 +611,8 @@ exports.assignMechanic = async (req, res) => {
     await booking.save();
 
     const updatedBooking = await Booking.findById(booking._id)
-      .populate('mechanic', 'name email');
+      .populate('mechanic', 'name email')
+      .populate('service');
 
     res.json({
       message: 'Mecânico atribuído',
