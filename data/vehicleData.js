@@ -1,6 +1,8 @@
 /**
- * Static vehicle data for Portuguese market
- * Contains makes, models, and fuel types
+ * DADOS ESTÁTICOS DE VEÍCULOS (Static Data Layer)
+ * * Contém a lista oficial de Marcas, Modelos e Combustíveis para o mercado português.
+ * * Usado para popular os "dropdowns" no Frontend em cascata.
+ * * @module data/vehicleData
  */
 
 const vehicleData = {
@@ -250,12 +252,21 @@ const vehicleData = {
   ]
 };
 
-// Get all makes
+/**
+ * OBTER TODAS AS MARCAS
+ * * Retorna um array com os nomes das marcas ordenados alfabeticamente.
+ * * @returns Array de strings
+ */
 const getMakes = () => {
   return vehicleData.makes.map(make => make.name).sort();
 };
 
-// Get models for a specific make
+/**
+ * OBTER MODELOS POR MARCA
+ * * Procura a marca e retorna a lista de modelos disponíveis.
+ * * @param makeName - O nome da marca (ex: 'BMW')
+ * * @returns Array de strings com nomes dos modelos
+ */
 const getModels = (makeName) => {
   const make = vehicleData.makes.find(
     m => m.name.toLowerCase() === makeName.toLowerCase()
@@ -264,7 +275,14 @@ const getModels = (makeName) => {
   return make.models.map(model => model.name).sort();
 };
 
-// Get fuel types for a specific make and model
+/**
+ * OBTER COMBUSTÍVEIS POR MODELO
+ * * Retorna apenas os combustíveis compatíveis com aquele carro específico.
+ * * Ex: Se escolher 'Tesla', só devolve 'Elétrico'.
+ * * @param makeName - Nome da marca
+ * * @param modelName - Nome do modelo
+ * * @returns Array de objetos com code e label
+ */
 const getFuelTypesForModel = (makeName, modelName) => {
   const make = vehicleData.makes.find(
     m => m.name.toLowerCase() === makeName.toLowerCase()
@@ -276,13 +294,17 @@ const getFuelTypesForModel = (makeName, modelName) => {
   );
   if (!model) return [];
 
+  // Mapeia os códigos de combustível para os objetos completos (com label)
   return model.fuelTypes.map(fuelCode => {
     const fuelType = vehicleData.fuelTypes.find(f => f.code === fuelCode);
     return fuelType || { code: fuelCode, label: fuelCode };
   });
 };
 
-// Get all fuel types
+/**
+ * OBTER TODOS OS COMBUSTÍVEIS
+ * * Retorna a lista mestre de combustíveis para listagens gerais.
+ */
 const getAllFuelTypes = () => {
   return vehicleData.fuelTypes;
 };
