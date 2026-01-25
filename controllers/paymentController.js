@@ -1,15 +1,26 @@
+/**
+ * CONTROLADOR DE PAGAMENTOS (Payment Controller)
+ * * Gere o processamento de pagamentos, simulações para desenvolvimento
+ * e consulta de estado de transações.
+ * * @module controllers/paymentController
+ */
+
 const Booking = require('../models/Booking');
 const { validateNIF } = require('../utils/helpers');
 
 /**
- * Simulate payment processing (Development mode)
- * In production, this would integrate with Stripe, MBWay, or Multibanco
+ * SIMULAR PAGAMENTO (Dev Mode / Pagamento Manual)
+ * * Endpoint usado para marcar uma reserva como paga sem passar por um gateway real.
+ * * Ideal para testes ou para registar pagamentos feitos por MBWay/Transferência manual.
+ * * Valida se o NIF do cliente é válido antes de fechar a conta.
+ * * @param req - Body deve conter bookingId, paymentMethod e opcionalmente customerNif
+ * @param res - Retorna confirmação e detalhes do pagamento simulado
  */
 exports.simulatePayment = async (req, res) => {
   try {
     const { bookingId, paymentMethod, customerNif } = req.body;
 
-    // Validate booking exists and belongs to user
+    // Validar existência da marcação e popular dados necessários
     const booking = await Booking.findById(bookingId)
       .populate('service')
       .populate('workshop');
@@ -18,37 +29,39 @@ exports.simulatePayment = async (req, res) => {
       return res.status(404).json({ message: 'Marcação não encontrada' });
     }
 
-    // Check if user owns this booking
+    // Segurança: Apenas o dono da marcação pode pagar
     if (booking.customer.toString() !== req.user.id) {
       return res.status(403).json({ message: 'Sem permissão' });
     }
 
-    // Check if already paid
+    // Evitar pagamentos duplicados
     if (booking.paymentStatus === 'paid') {
       return res.status(400).json({ message: 'Esta marcação já foi paga' });
     }
 
-    // Validate NIF if provided
+    // Validação de NIF (Fiscal) se fornecido
     if (customerNif && !validateNIF(customerNif)) {
       return res.status(400).json({
         message: 'NIF inválido. O NIF deve ter 9 dígitos e ser válido.'
       });
     }
 
-    // Simulate payment processing (always succeeds in dev mode)
-    // In production, this would call the actual payment gateway
-
-    // Update booking with payment info
+    // --- LÓGICA DE SIMULAÇÃO ---
+    // Em produção, aqui chamaria a API do banco.
+    
+    // Atualizar estado para PAGO
     booking.paymentStatus = 'paid';
     booking.paymentMethod = paymentMethod || 'simulated';
     booking.paidAt = new Date();
+    
+    // Guardar NIF na fatura se o cliente pediu
     if (customerNif) {
       booking.customerNif = customerNif;
     }
 
     await booking.save();
 
-    // Return success with booking details
+    // Retornar recibo digital
     res.json({
       success: true,
       message: 'Pagamento processado com sucesso',
@@ -74,14 +87,18 @@ exports.simulatePayment = async (req, res) => {
 };
 
 /**
- * Process payment (Stripe-ready placeholder)
- * This endpoint is prepared for Stripe integration
+ * PROCESSAR PAGAMENTO REAL (Integração Futura Stripe)
+ * * Estrutura preparada para receber tokens de pagamento (Stripe Payment Intents).
+ * * Atualmente funciona como placeholder, mas contém as validações de segurança
+ * necessárias para quando o gateway for ativado.
+ * * @param req - Body espera paymentMethodId (Token do cartão)
+ * @param res - Confirmação da transação
  */
 exports.processPayment = async (req, res) => {
   try {
     const { bookingId, paymentMethodId, customerNif } = req.body;
 
-    // Validate booking
+    // Validações de Segurança e Integridade
     const booking = await Booking.findById(bookingId)
       .populate('service')
       .populate('workshop');
@@ -98,25 +115,27 @@ exports.processPayment = async (req, res) => {
       return res.status(400).json({ message: 'Esta marcação já foi paga' });
     }
 
-    // Validate NIF if provided
+    // Validação Fiscal
     if (customerNif && !validateNIF(customerNif)) {
       return res.status(400).json({
         message: 'NIF inválido. O NIF deve ter 9 dígitos e ser válido.'
       });
     }
 
-    // In production, integrate with Stripe here:
-    // const paymentIntent = await stripe.paymentIntents.create({
-    //   amount: booking.service.price * 100, // Stripe uses cents
-    //   currency: 'eur',
-    //   payment_method: paymentMethodId,
-    //   confirm: true
-    // });
+    /* TODO: Integração Stripe em Produção
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: booking.service.price * 100, // Stripe usa centavos
+        currency: 'eur',
+        payment_method: paymentMethodId,
+        confirm: true
+      });
+    */
 
-    // For now, simulate success
+    // Simulação de Sucesso do Gateway
     booking.paymentStatus = 'paid';
-    booking.paymentMethod = 'card';
+    booking.paymentMethod = 'card'; // Assume cartão para este endpoint
     booking.paidAt = new Date();
+    
     if (customerNif) {
       booking.customerNif = customerNif;
     }
@@ -144,7 +163,12 @@ exports.processPayment = async (req, res) => {
 };
 
 /**
- * Get payment status for a booking
+ * CONSULTAR ESTADO DO PAGAMENTO
+ * * Permite verificar se uma reserva específica já foi liquidada.
+ * * Possui controlo de acesso: Apenas o Cliente dono da reserva ou um Admin
+ * podem ver estes detalhes financeiros.
+ * * @param req - ID da marcação nos parâmetros da URL
+ * @param res - Objeto com status, método e data de pagamento
  */
 exports.getPaymentStatus = async (req, res) => {
   try {
@@ -152,13 +176,13 @@ exports.getPaymentStatus = async (req, res) => {
 
     const booking = await Booking.findById(bookingId)
       .populate('service')
-      .select('paymentStatus paymentMethod paidAt customerNif service');
+      .select('paymentStatus paymentMethod paidAt customerNif service customer'); // Select otimizado
 
     if (!booking) {
       return res.status(404).json({ message: 'Marcação não encontrada' });
     }
 
-    // Check permissions
+    // Verificação de Permissões (Cliente Dono ou Admin)
     if (booking.customer?.toString() !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ message: 'Sem permissão' });
     }
