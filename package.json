@@ -3,11 +3,10 @@
   "version": "1.0.0",
   "description": "Backend para plataforma de gestão de oficinas",
   "main": "server.js",
-"scripts": {
-  "start": "node server.js",
-  "dev": "nodemon server.js"
-},
-
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
   "author": "",
   "license": "ISC",
   "dependencies": {
@@ -16,7 +15,8 @@
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
-    "mongoose": "^9.0.1"
+    "mongoose": "^9.0.1",
+    "node-cron": "^4.2.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.11"
