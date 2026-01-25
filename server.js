@@ -66,6 +66,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/workshops', workshopRoutes);
 app.use('/api/services', serviceRoutes);
 app.use('/api/vehicles', vehicleRoutes);
+app.use('/api/booking', bookingRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/shifts', shiftRoutes);
 app.use('/api/reviews', reviewRoutes);

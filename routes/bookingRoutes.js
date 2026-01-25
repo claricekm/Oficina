@@ -9,6 +9,7 @@ const express = require('express');
 const router = express.Router();
 const bookingController = require('../controllers/bookingController');
 const authMiddleware = require('../middleware/authMiddleware');
+const workshopController = require('../controllers/workshopController');
 // Importação dos guardas de rota (RBAC) para segurança granular
 const { 
   customerOnly, 
@@ -16,6 +17,8 @@ const {
   adminOrMechanic, 
   adminOrCustomer 
 } = require('../middleware/rbacMiddleware');
+
+console.log('✅ bookingRoutes.js carregado');
 
 // --- ROTAS PÚBLICAS / UTILITÁRIAS ---
 
@@ -87,5 +90,11 @@ router.put('/:id/cancel', authMiddleware, adminOrCustomer, bookingController.can
  * * Apenas Admin pode decidir quem faz o serviço.
  */
 router.put('/:id/assign', authMiddleware, adminOnly, bookingController.assignMechanic);
+
+/**
+ * ROTA DE COMPATIBILIDADE
+ * O Frontend procura os serviços aqui, então redirecionamos para o controller de workshops.
+ */
+router.get('/:id/services', workshopController.getWorkshopServices);
 
 module.exports = router;
