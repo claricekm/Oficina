@@ -97,6 +97,12 @@ const BookingSchema = new mongoose.Schema({
   },
 
   // Payment tracking
+
+  paid: {
+    type: Boolean,
+    default: false
+  },
+  
   paymentStatus: {
     type: String,
     enum: ['pending', 'paid', 'failed', 'refunded'],
