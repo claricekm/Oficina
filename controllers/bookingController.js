@@ -4,6 +4,7 @@ const Service = require('../models/Service');
 const Vehicle = require('../models/Vehicle');
 const Workshop = require('../models/Workshop');
 const User = require('../models/User');
+const Review = require('../models/Review');
 
 // Constants
 const MAX_WEEKLY_HOURS = 40;
@@ -470,7 +471,7 @@ exports.getBooking = async (req, res) => {
       .populate('vehicle')
       .populate('service')
       .populate('workshop');
-    
+
     if (!booking) {
       return res.status(404).json({ message: 'Marcação não encontrada' });
     }
@@ -484,7 +485,18 @@ exports.getBooking = async (req, res) => {
       return res.status(403).json({ message: 'Sem permissão' });
     }
 
-    res.json(booking);
+    // Check if booking has a review (for completed bookings)
+    let hasReview = false;
+    if (booking.status === 'completed') {
+      const existingReview = await Review.findOne({ booking: booking._id });
+      hasReview = !!existingReview;
+    }
+
+    // Return booking with hasReview flag
+    res.json({
+      ...booking.toObject(),
+      hasReview
+    });
 
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -689,7 +701,11 @@ exports.assignMechanic = async (req, res) => {
     }
 
     booking.mechanic = mechanicId;
-    booking.status = 'confirmed';
+    // Only change status to 'confirmed' if currently 'pending'
+    // Don't override 'approved' or other statuses
+    if (booking.status === 'pending') {
+      booking.status = 'confirmed';
+    }
     await booking.save();
 
     const updatedBooking = await Booking.findById(booking._id)
